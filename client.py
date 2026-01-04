@@ -8,8 +8,10 @@ from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt
 from rich import print as rprint
 import sys
+import os
 
 console = Console()
+SESSION_FILE = "wizard_session.json"
 
 BASE_URL = "http://localhost:8000/api/game"
 WS_URL = "ws://localhost:8000/api/game/ws"
@@ -22,7 +24,54 @@ class WizardClient:
         self.name = None
         self.is_prompting = False
 
+    
+    def save_session(self, token):
+        with open(SESSION_FILE, "w") as f:
+            json.dump({
+                "game_id": self.game_id,
+                "player_id": self.player_id,
+                "token": token,
+                "name": self.name
+            }, f)
+            
+    def load_session(self):
+        if os.path.exists(SESSION_FILE):
+            try:
+                with open(SESSION_FILE, "r") as f:
+                    return json.load(f)
+            except:
+                return None
+        return None
+        
+    def clear_session(self):
+        if os.path.exists(SESSION_FILE):
+            os.remove(SESSION_FILE)
+
     def join_lobby(self):
+        # Check for previous session
+        session = self.load_session()
+        if session:
+            ans = Prompt.ask(f"Found existing session for game [bold cyan]{session['game_id']}[/bold cyan] as [bold cyan]{session['name']}[/bold cyan]. Rejoin?", choices=["y", "n"], default="y")
+            if ans == "y":
+                try:
+                    res = requests.post(f"{BASE_URL}/rejoin", json={
+                        "game_id": session["game_id"],
+                        "token": session["token"]
+                    })
+                    if res.status_code == 200:
+                        data = res.json()
+                        self.game_id = data["game_id"]
+                        self.player_id = data["player_id"]
+                        self.name = data["name"]
+                        rprint(f"[green]Successfully rejoined game {self.game_id}![/green]")
+                        return # Skip the rest of join_lobby
+                    else:
+                        rprint("[red]Failed to rejoin (session might be expired). Starting fresh.[/red]")
+                        self.clear_session()
+                except Exception as e:
+                    rprint(f"[red]Error rejoining: {e}[/red]")
+                    self.clear_session()
+        
         self.name = Prompt.ask("Enter your name")
         gid = Prompt.ask("Enter Game ID to join (leave blank to create new)", default="")
         
@@ -40,6 +89,8 @@ class WizardClient:
             if response.status_code == 200:
                 self.game_id = data["game_id"]
                 self.player_id = data["player_id"]
+                token = data["token"]
+                self.save_session(token)
                 rprint(f"[green]Joined game {self.game_id} as player {self.player_id}[/green]")
             else:
                 rprint(f"[red]Error: {data['detail']}[/red]")

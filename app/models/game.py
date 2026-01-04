@@ -53,6 +53,7 @@ class GameState(BaseModel):
     dealer_idx: int = 0
     hands: Dict[int, List[Card]] = {} # player_idx -> hand
     bids: Dict[int, int] = {} # player_idx -> bid
+    player_tokens: Dict[str, int] = {} # token (uuid) -> player_idx
     trump_suit: Optional[str] = None
     phase: GamePhase = GamePhase.LOBBY
     current_player: int = 0

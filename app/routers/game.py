@@ -16,6 +16,10 @@ class JoinRequest(BaseModel):
     name: str
     game_id: Optional[str] = None
     bidding_mode: BiddingMode = BiddingMode.SEQUENTIAL
+    
+class RejoinRequest(BaseModel):
+    game_id: str
+    token: str
 
 class ActionRequest(BaseModel):
     player_id: int
@@ -30,16 +34,47 @@ async def join_game(request: JoinRequest):
         player_idx = game.add_player(request.name)
         if player_idx == -1:
             raise HTTPException(status_code=400, detail="Game full or already started")
+            
+        # Generate session token
+        token = str(uuid.uuid4())
+        game.state.player_tokens[token] = player_idx
+        
         await manager.broadcast_state(request.game_id, game)
-        return {"game_id": request.game_id, "player_id": player_idx}
+        return {"game_id": request.game_id, "player_id": player_idx, "token": token}
     else:
         # Create new game
         game_id = str(uuid.uuid4())[:8]
         game = WizardGame(game_id, request.bidding_mode)
         player_idx = game.add_player(request.name)
         games[game_id] = game
+        
+        # Generate session token
+        token = str(uuid.uuid4())
+        game.state.player_tokens[token] = player_idx
+        
         # No broadcast needed for the very first player since they just joined and no one else is there
-        return {"game_id": game_id, "player_id": player_idx}
+        return {"game_id": game_id, "player_id": player_idx, "token": token}
+
+@router.post("/rejoin")
+async def rejoin_game(request: RejoinRequest):
+    if request.game_id not in games:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    game = games[request.game_id]
+    
+    if request.token not in game.state.player_tokens:
+        raise HTTPException(status_code=403, detail="Invalid session token")
+        
+    player_idx = game.state.player_tokens[request.token]
+    
+    # We don't necessarily need to broadcast on rejoin, but we could to notify others they are back?
+    # For now, just return the info needed to reconnect
+    return {
+        "game_id": request.game_id, 
+        "player_id": player_idx, 
+        "token": request.token,
+        "name": game.state.players[player_idx]
+    }
 
 @router.post("/{game_id}/start")
 async def start_game(game_id: str):
