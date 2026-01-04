@@ -52,6 +52,18 @@ async def start_game(game_id: str):
     else:
         raise HTTPException(status_code=400, detail="Need at least 3 players to start")
 
+@router.post("/{game_id}/ready")
+async def player_ready(game_id: str, request: ActionRequest):
+    if game_id not in games:
+        raise HTTPException(status_code=404, detail="Game not found")
+    game = games[game_id]
+    
+    if game.player_ready(request.player_id):
+        await manager.broadcast_state(game_id, game)
+        return {"status": "success"}
+    else:
+        raise HTTPException(status_code=400, detail="Not in round over phase or invalid player")
+
 @router.post("/{game_id}/action")
 async def game_action(game_id: str, request: ActionRequest):
     if game_id not in games:
@@ -62,9 +74,7 @@ async def game_action(game_id: str, request: ActionRequest):
     error_detail = "Invalid action"
     
     if request.action == "bid":
-        success = game.submit_bid(request.player_id, request.value)
-        if not success:
-            error_detail = f"Invalid bid. Must be between 0 and {game.state.current_round}."
+        success, error_detail = game.submit_bid(request.player_id, request.value)
     elif request.action == "play":
         # Check why it's invalid
         hand = game.state.hands.get(request.player_id, [])

@@ -29,6 +29,10 @@ class WizardClient:
         payload = {"name": self.name}
         if gid:
             payload["game_id"] = gid
+        else:
+            # Creating new game, prompt for mode
+            mode = Prompt.ask("Bidding Mode", choices=["sequential", "simultaneous", "secret", "canadian"], default="sequential")
+            payload["bidding_mode"] = mode
             
         try:
             response = requests.post(f"{BASE_URL}/join", json=payload)
@@ -54,7 +58,8 @@ class WizardClient:
         
         # Header
         trump_info = f"Trump: [bold yellow]{self.state['trump_suit'] or 'None'}[/bold yellow]"
-        rprint(Panel(f"Wizard - Round {self.state['current_round']} | {trump_info} | Phase: {self.state['phase']}\nGame ID: [bold]{self.game_id}[/bold]", title=f"Player: {self.name} (#{self.player_id})"))
+        mode_info = f"Mode: [bold cyan]{self.state['bidding_mode']}[/bold cyan]"
+        rprint(Panel(f"Wizard - Round {self.state['current_round']} | {trump_info} | {mode_info} | Phase: {self.state['phase']}\nGame ID: [bold]{self.game_id}[/bold]", title=f"Player: {self.name} (#{self.player_id})"))
 
         # Scores and Trick Wins
         table = Table(title="Players")
@@ -82,15 +87,33 @@ class WizardClient:
 
         # Hand
         hand_str = []
+        legal_moves = self.state.get("legal_moves", [])
+        
         for i, c in enumerate(self.state["hand"]):
-            card_repr = f"[{i}] {c['suit'] or ''}{c['rank'] if c['type'] == 'regular' else c['type']}"
-            hand_str.append(card_repr)
+            card_repr = f"{c['suit'] or ''}{c['rank'] if c['type'] == 'regular' else c['type']}"
+            if "A" in card_repr or "K" in card_repr or "Q" in card_repr: # Simple hack to verify new notation
+                 pass 
+
+            if self.state["phase"] == "playing" and self.state["current_player"] == self.player_id:
+                if i in legal_moves:
+                    # Highlight legal moves
+                    display = f"[bold green][{i}] {card_repr}[/bold green]"
+                else:
+                    # Dim illegal moves
+                    display = f"[dim][{i}] {card_repr}[/dim]"
+            else:
+                 display = f"[{i}] {card_repr}"
+            
+            hand_str.append(display)
         
         rprint(Panel("  ".join(hand_str), title="Your Hand", subtitle=f"Lead Suit: {self.state['lead_suit'] or 'None'}"))
 
     async def receive_loop(self, websocket):
         async for message in websocket:
             self.state = json.loads(message)
+            # Reset ready flag when round changes
+            if self.state["phase"] != "round_over":
+                 self.ready_sent = False
             self.render_state()
 
     async def input_loop(self):
@@ -133,16 +156,29 @@ class WizardClient:
                     await asyncio.sleep(1)
 
             elif phase == "bidding":
-                if current_player == self.player_id and str(self.player_id) not in self.state["bids"]:
-                    # Check if we already bid (bids can be redacted but we know if we bid)
+                is_my_turn = False
+                if self.state["bidding_mode"] in ["sequential", "canadian"]:
+                    is_my_turn = current_player == self.player_id
+                else:
+                    # Simultaneous or Secret: check if I haven't bid yet
+                    # In these modes, current_player doesn't necessarily block others
+                    is_my_turn = str(self.player_id) not in self.state["bids"]
+
+                if is_my_turn:
                     self.is_prompting = True
                     bid = await asyncio.to_thread(IntPrompt.ask, f"Your turn! Enter bid (0-{self.state['current_round']})")
                     self.is_prompting = False
-                    requests.post(f"{BASE_URL}/{self.game_id}/action", json={
+                    res = requests.post(f"{BASE_URL}/{self.game_id}/action", json={
                         "player_id": self.player_id,
                         "action": "bid",
                         "value": bid
                     })
+                    if res.status_code != 200:
+                         try:
+                            detail = res.json().get("detail", "Invalid bid!")
+                         except Exception:
+                            detail = "Invalid bid!"
+                         rprint(f"[red]{detail}[/red]")
                 else:
                     await asyncio.sleep(1)
 
@@ -162,6 +198,22 @@ class WizardClient:
                         except Exception:
                             detail = "Invalid play!"
                         rprint(f"[red]{detail}[/red]")
+                else:
+                    await asyncio.sleep(1)
+
+            elif phase == "round_over":
+                if not getattr(self, "ready_sent", False):
+                    self.is_prompting = True
+                    # Just a simple confirmation to proceed
+                    await asyncio.to_thread(Prompt.ask, "Round Over! Press Enter to deal next round...")
+                    self.is_prompting = False
+                    requests.post(f"{BASE_URL}/{self.game_id}/ready", json={
+                        "player_id": self.player_id, 
+                        "action": "ready", # Dummy
+                        "value": 0
+                    })
+                    self.ready_sent = True
+                    rprint("[cyan]Waiting for other players...[/cyan]")
                 else:
                     await asyncio.sleep(1)
 

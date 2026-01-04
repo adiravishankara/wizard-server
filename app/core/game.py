@@ -12,6 +12,7 @@ class WizardGame:
             bidding_mode=bidding_mode,
             phase=GamePhase.LOBBY
         )
+        self.players_ready_for_next_round = set()
 
     def add_player(self, name: str) -> int:
         if self.state.phase != GamePhase.LOBBY:
@@ -23,6 +24,15 @@ class WizardGame:
         self.state.trick_wins.append(0)
         player_idx = len(self.state.players) - 1
         return player_idx
+
+    def player_ready(self, player_idx: int):
+        if self.state.phase != GamePhase.ROUND_OVER:
+            return False
+        
+        self.players_ready_for_next_round.add(player_idx)
+        if len(self.players_ready_for_next_round) == len(self.state.players):
+            self.next_round()
+        return True
 
     def start_game(self):
         num_players = len(self.state.players)
@@ -43,16 +53,18 @@ class WizardGame:
         self.state.current_trick = []
         self.state.lead_suit = None
         self.state.current_player = (self.state.dealer_idx + 1) % num_players
+        self.players_ready_for_next_round = set()
         self.deal()
 
     def build_deck(self) -> List[Card]:
         deck = []
         for suit in self.SUITS:
-            for rank in range(1, 14):
+            for rank in range(2, 15):
                 deck.append(Card(suit=suit, rank=rank, type=CardType.REGULAR))
         for _ in range(4):
             deck.append(Card(type=CardType.WIZARD))
             deck.append(Card(type=CardType.JESTER))
+        print(f"DEBUG: Deck built with {len(deck)} cards. Specials: {[c for c in deck if c.type != CardType.REGULAR]}")
         return deck
 
     def deal(self):
@@ -94,13 +106,30 @@ class WizardGame:
         self.state.current_player = (self.state.dealer_idx + 1) % len(self.state.players)
         return True
 
-    def submit_bid(self, player_idx: int, bid: int):
-        if self.state.phase != GamePhase.BIDDING or player_idx != self.state.current_player:
-            return False
+    def submit_bid(self, player_idx: int, bid: int) -> tuple[bool, str]:
+        if self.state.phase != GamePhase.BIDDING:
+            return False, "Not in bidding phase"
+        
+        # Sequential/Canadian enforcement
+        if self.state.bidding_mode in [BiddingMode.SEQUENTIAL, BiddingMode.CANADIAN]:
+            if player_idx != self.state.current_player:
+                return False, f"Not your turn to bid. Waiting for {self.state.players[self.state.current_player]}"
+        
+        # Prevent double bidding
+        if player_idx in self.state.bids:
+            return False, "You have already bid"
         
         # Valid bid: 0 to current_round
         if not (0 <= bid <= self.state.current_round):
-            return False
+            return False, f"Invalid bid. Must be between 0 and {self.state.current_round}"
+
+        # Canadian rule: Dealer (last bidder) cannot make total sum == round number
+        if self.state.bidding_mode == BiddingMode.CANADIAN:
+            num_players = len(self.state.players)
+            if len(self.state.bids) == num_players - 1:
+                current_sum = sum(self.state.bids.values())
+                if current_sum + bid == self.state.current_round:
+                    return False, f"Canadian Rule: Last bidder cannot bid {bid} as it would make the total bids equal to {self.state.current_round}"
             
         self.state.bids[player_idx] = bid
         num_players = len(self.state.players)
@@ -109,8 +138,9 @@ class WizardGame:
             self.state.phase = GamePhase.PLAYING
             self.state.current_player = (self.state.dealer_idx + 1) % num_players
         else:
-            self.state.current_player = (self.state.current_player + 1) % num_players
-        return True
+            if self.state.bidding_mode in [BiddingMode.SEQUENTIAL, BiddingMode.CANADIAN]:
+                self.state.current_player = (self.state.current_player + 1) % num_players
+        return True, ""
 
     def get_legal_plays(self, player_idx: int) -> List[Card]:
         hand = self.state.hands[player_idx]
@@ -132,6 +162,10 @@ class WizardGame:
         if self.state.phase != GamePhase.PLAYING or player_idx != self.state.current_player:
             return False
             
+        # Defensive reset: if this is the start of a trick, ensure lead_suit is None
+        if not self.state.current_trick:
+            self.state.lead_suit = None
+            
         hand = self.state.hands[player_idx]
         if not (0 <= card_idx < len(hand)):
             return False
@@ -140,47 +174,53 @@ class WizardGame:
         legal_cards = self.get_legal_plays(player_idx)
         
         if card not in legal_cards:
+            print(f"DEBUG: REJECTED play by {player_idx}: {card}. Lead: {self.state.lead_suit}, Legal: {legal_cards}")
             return False
             
         self.state.hands[player_idx].pop(card_idx)
         self.state.current_trick.append((player_idx, card))
         
+        print(f"DEBUG: Player {player_idx} played {card}. Hand now: {len(self.state.hands[player_idx])}")
+        
         # Update lead suit if it's the first card and not a special
         if len(self.state.current_trick) == 1:
             if card.type == CardType.REGULAR:
                 self.state.lead_suit = card.suit
-            elif card.type == CardType.WIZARD:
-                # Wizard as lead? It doesn't set a lead suit effectively, or rather it wins immediately?
-                # Actually Wizard lead means any suit can be played but no lead suit is set.
+                print(f"DEBUG: Lead suit set to {self.state.lead_suit}")
+            else:
                 self.state.lead_suit = None
-            elif card.type == CardType.JESTER:
-                # Jester lead: first regular card determines lead suit
-                self.state.lead_suit = None
+                print(f"DEBUG: Lead suit remains None (Special led)")
 
-        # Re-eval lead suit if all previous were jesters and this is a regular
-        if self.state.lead_suit is None:
+        # Re-eval lead suit if it was a Jester lead and this is a regular
+        # BUT only if a Wizard wasn't the very first card (Wizard lead = no lead suit)
+        first_card = self.state.current_trick[0][1]
+        if self.state.lead_suit is None and first_card.type != CardType.WIZARD:
              for _, c in self.state.current_trick:
                  if c.type == CardType.REGULAR:
                      self.state.lead_suit = c.suit
+                     print(f"DEBUG: Lead suit re-evaluated to {self.state.lead_suit}")
                      break
 
         num_players = len(self.state.players)
         if len(self.state.current_trick) == num_players:
             winner_idx = self._calculate_trick_winner()
+            print(f"DEBUG: Trick finished. Winner: {winner_idx}")
             self.state.trick_wins[winner_idx] += 1
             self.state.current_player = winner_idx
             self.state.current_trick = []
             self.state.lead_suit = None
             
             # Check if round over
-            if not self.state.hands[0]:
+            if not self.state.hands[winner_idx]:
+                print(f"DEBUG: Round over. Scoring.")
                 self.score_round()
                 if self.state.current_round == self.MAX_ROUNDS_MAP[num_players]:
                     self.state.phase = GamePhase.GAME_OVER
                 else:
+                    self.state.phase = GamePhase.ROUND_OVER
                     self.state.current_round += 1
                     self.state.dealer_idx = (self.state.dealer_idx + 1) % num_players
-                    self.next_round()
+                    # Wait for players to be ready
         else:
             self.state.current_player = (self.state.current_player + 1) % num_players
             
@@ -248,6 +288,7 @@ class WizardGame:
             scores=self.state.scores,
             current_round=self.state.current_round,
             dealer_idx=self.state.dealer_idx,
+            bidding_mode=self.state.bidding_mode,
             hand=self.state.hands.get(player_idx, []),
             bids=visible_bids,
             trump_suit=self.state.trump_suit,
@@ -256,5 +297,6 @@ class WizardGame:
             current_trick=self.state.current_trick,
             lead_suit=self.state.lead_suit,
             trick_wins=self.state.trick_wins,
-            trick_count={i: self.state.trick_wins[i] if i < len(self.state.trick_wins) else 0 for i in range(len(self.state.players))}
+            trick_count={i: self.state.trick_wins[i] if i < len(self.state.trick_wins) else 0 for i in range(len(self.state.players))},
+            legal_moves=[i for i, c in enumerate(self.state.hands.get(player_idx, [])) if c in self.get_legal_plays(player_idx)] if self.state.phase == GamePhase.PLAYING and self.state.current_player == player_idx else []
         )

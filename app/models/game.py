@@ -17,7 +17,15 @@ class Card(BaseModel):
             return "W"
         if self.type == CardType.JESTER:
             return "J"
-        return f"{self.suit}{self.rank}"
+        
+        # Rank mapping
+        rank_str = str(self.rank)
+        if self.rank == 11: rank_str = "J"
+        elif self.rank == 12: rank_str = "Q"
+        elif self.rank == 13: rank_str = "K"
+        elif self.rank == 14: rank_str = "A"
+        
+        return f"{self.suit}{rank_str}"
     
     def __str__(self):
         return self.__repr__()
@@ -26,12 +34,14 @@ class BiddingMode(str, Enum):
     SEQUENTIAL = "sequential"
     SIMULTANEOUS = "simultaneous"
     SECRET = "secret"
+    CANADIAN = "canadian"
 
 class GamePhase(str, Enum):
     LOBBY = "lobby"
     BIDDING = "bidding"
     PLAYING = "playing"
     WAITING_TRUMP = "waiting_trump"
+    ROUND_OVER = "round_over"
     GAME_OVER = "game_over"
 
 class GameState(BaseModel):
@@ -62,6 +72,7 @@ class PlayerState(BaseModel):
     scores: List[int]
     current_round: int
     dealer_idx: int
+    bidding_mode: BiddingMode
     hand: List[Card]
     bids: Dict[int, Optional[int]] # Redacted bids if secret
     trump_suit: Optional[str]
@@ -71,3 +82,7 @@ class PlayerState(BaseModel):
     lead_suit: Optional[str]
     trick_wins: List[int]
     trick_count: Dict[int, int]
+    legal_moves: List[int] = [] # Indices of cards in hand that are legal to play
+    
+    class Config:
+        use_enum_values = True
