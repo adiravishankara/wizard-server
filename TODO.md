@@ -1,0 +1,1 @@
+Most of the game logic works well, however, I noticed that with the wizard sessions, only some of the data is saved. For example, I had 3 players, and all 3 simulated lost connection, but only player b was able to come back. We should be able to save the data for all of the players and such.s
