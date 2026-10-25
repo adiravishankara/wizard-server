@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Runtime league data (created by the server at runtime)
+data/

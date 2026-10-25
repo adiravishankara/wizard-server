@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wizard — Card Game</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">🃏 Wizard</div>
+  <nav>
+    <button id="nav-games" class="nav-btn active">Games</button>
+    <button id="nav-leagues" class="nav-btn">Leagues</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ GAMES VIEW ============ -->
+  <section id="view-games">
+    <div id="games-home" class="panel-grid">
+      <div class="card panel">
+        <h2>New game</h2>
+        <label>Your name <input id="new-name" placeholder="e.g. Adi" maxlength="24"></label>
+        <label>Bidding
+          <select id="new-bidding">
+            <option value="sequential">Sequential</option>
+            <option value="simultaneous">Simultaneous</option>
+            <option value="secret">Secret</option>
+            <option value="canadian">Canadian</option>
+          </select>
+        </label>
+        <button id="btn-create" class="primary">Create game</button>
+      </div>
+      <div class="card panel">
+        <h2>Join game</h2>
+        <label>Game code <input id="join-code" placeholder="8-char code" maxlength="8"></label>
+        <label>Your name <input id="join-name" placeholder="e.g. Adi" maxlength="24"></label>
+        <button id="btn-join" class="primary">Join game</button>
+      </div>
+      <div class="card panel">
+        <h2>My sessions</h2>
+        <div id="sessions-list" class="sessions"></div>
+      </div>
+    </div>
+
+    <div id="game-screen" class="hidden">
+      <div class="game-header">
+        <button id="btn-leave" class="ghost">← Leave</button>
+        <div class="game-meta">
+          <span class="game-code" id="g-code"></span>
+          <span id="g-phase" class="pill"></span>
+          <span id="g-round" class="pill"></span>
+          <span id="g-trump" class="pill"></span>
+        </div>
+      </div>
+      <div id="game-alert" class="alert hidden"></div>
+      <div class="game-layout">
+        <div class="game-main">
+          <div id="lobby-panel" class="card hidden">
+            <h2>Lobby</h2>
+            <div id="lobby-players" class="player-list"></div>
+            <button id="btn-start" class="primary">Start game</button>
+            <h3>Teams <span class="hint">(optional — enables team scoring)</span></h3>
+            <div class="row">
+              <select id="league-load"><option value="">Load teams from league…</option></select>
+              <button id="btn-league-load" class="ghost">Load</button>
+            </div>
+            <div id="team-editor"></div>
+            <div class="row">
+              <input id="new-team-name" placeholder="Team name" maxlength="24">
+              <input id="new-team-color" type="color" value="#4f8cff">
+              <button id="btn-add-team" class="ghost">Add team</button>
+            </div>
+            <button id="btn-save-teams" class="primary">Save teams</button>
+          </div>
+
+          <div id="bid-panel" class="card hidden">
+            <h2>Place your bid</h2>
+            <p id="bid-info"></p>
+            <div class="bid-controls">
+              <button id="bid-minus">−</button>
+              <span id="bid-value">0</span>
+              <button id="bid-plus">+</button>
+              <button id="btn-bid" class="primary">Bid</button>
+            </div>
+          </div>
+
+          <div id="trump-panel" class="card hidden">
+            <h2>Choose trump suit</h2>
+            <div class="suit-picker">
+              <button data-suit="H" class="suit red">♥</button>
+              <button data-suit="D" class="suit red">♦</button>
+              <button data-suit="C" class="suit">♣</button>
+              <button data-suit="S" class="suit">♠</button>
+            </div>
+          </div>
+
+          <div id="table-panel" class="card">
+            <h2>Table</h2>
+            <div id="trick-area" class="trick"></div>
+            <p id="turn-info" class="turn"></p>
+          </div>
+
+          <div id="hand-panel" class="card">
+            <h2>Your hand</h2>
+            <div id="hand" class="hand"></div>
+          </div>
+
+          <div id="roundover-panel" class="card hidden">
+            <h2>Round over</h2>
+            <p>Scores are updated. Ready for the next round?</p>
+            <button id="btn-ready" class="primary">Ready</button>
+          </div>
+
+          <div id="gameover-panel" class="card hidden">
+            <h2>Game over 🏆</h2>
+            <div id="final-scores"></div>
+            <div id="record-league" class="hidden">
+              <div class="row">
+                <select id="record-league-select"><option value="">Record to league…</option></select>
+                <button id="btn-record" class="primary">Record result</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="game-side">
+          <div class="card">
+            <h2>Scores</h2>
+            <div id="scores"></div>
+          </div>
+          <div class="card hidden" id="teams-card">
+            <h2>Team scores</h2>
+            <div id="team-scores"></div>
+          </div>
+          <div class="card">
+            <h2>Players</h2>
+            <div id="players-side"></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ LEAGUES VIEW ============ -->
+  <section id="view-leagues" class="hidden">
+    <div id="leagues-home" class="panel-grid">
+      <div class="card panel">
+        <h2>New league</h2>
+        <label>League name <input id="league-name" placeholder="e.g. Friday Night Wizards" maxlength="48"></label>
+        <button id="btn-create-league" class="primary">Create league</button>
+      </div>
+      <div class="card panel wide">
+        <h2>Leagues</h2>
+        <div id="leagues-list" class="sessions"></div>
+      </div>
+    </div>
+
+    <div id="league-screen" class="hidden">
+      <div class="game-header">
+        <button id="btn-league-back" class="ghost">← Leagues</button>
+        <h2 id="league-title"></h2>
+      </div>
+      <div class="tabs">
+        <button id="tab-teams" class="tab active">Teams &amp; Rosters</button>
+        <button id="tab-standings" class="tab">Standings</button>
+        <button id="tab-games" class="tab">Games</button>
+      </div>
+      <div id="league-tab-teams">
+        <div class="panel-grid">
+          <div class="card panel">
+            <h3>Add player</h3>
+            <div class="row">
+              <input id="league-player-name" placeholder="Player name" maxlength="24">
+              <button id="btn-add-league-player" class="primary">Add</button>
+            </div>
+            <h3>League players</h3>
+            <div id="league-players"></div>
+          </div>
+          <div class="card panel">
+            <h3>Create team</h3>
+            <div class="row">
+              <input id="league-team-name" placeholder="Team name" maxlength="24">
+              <input id="league-team-color" type="color" value="#4f8cff">
+              <button id="btn-add-league-team" class="primary">Add team</button>
+            </div>
+            <div id="league-teams"></div>
+          </div>
+        </div>
+      </div>
+      <div id="league-tab-standings" class="hidden">
+        <div class="card"><div id="standings-table"></div></div>
+      </div>
+      <div id="league-tab-games" class="hidden">
+        <div class="card"><div id="league-games"></div></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
