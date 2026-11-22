@@ -171,6 +171,16 @@ def test_league_ui_is_served_without_browser_dialogs(client):
     assert "alert(" not in js.replace("Alert(", "").replace("alertMsg(", "")
 
 
+def test_game_over_and_lobby_ui_hooks_are_served(client):
+    html = client.get("/").text
+    for el in ("go-chart", "go-rematch", "btn-shuffle", "shuffle-on-start", "lobby-waiting",
+               '<script src="/static/chart.js">'):
+        assert el in html
+    chart = client.get("/static/chart.js")
+    assert chart.status_code == 200
+    assert "prefers-reduced-motion" in chart.text
+
+
 def _hand(dealer, trump, *lines):
     return {"dealer": dealer, "trump": trump,
             "lines": [{"points": p, "bid": b, "tricks": t} for p, b, t in lines]}

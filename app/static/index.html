@@ -76,8 +76,16 @@
       <p id="status-line" class="status-line"></p>
 
       <div id="lobby-panel" class="card hidden">
-        <h2>Lobby</h2>
-        <div id="lobby-players" class="player-list"></div>
+        <div class="lobby-head">
+          <h2>Lobby</h2>
+          <div id="lobby-tags" class="lobby-tags"></div>
+        </div>
+        <div id="lobby-players" class="player-list seat-list"></div>
+        <div id="lobby-waiting" class="lobby-waiting hidden"></div>
+        <div id="lobby-tools" class="lobby-tools hidden">
+          <button id="btn-shuffle" class="ghost" type="button"><span aria-hidden="true">🔀</span> Shuffle seats</button>
+          <label class="check-toggle"><input type="checkbox" id="shuffle-on-start"><span>Shuffle at start</span></label>
+        </div>
         <button id="btn-start" class="primary">Start game</button>
         <div class="lobby-league">
           <h3>League</h3>
@@ -145,9 +153,15 @@
             <h2 id="go-title">Game over</h2>
             <div id="go-sub" class="hint"></div>
           </div>
+          <div id="go-rematch" class="go-rematch"></div>
         </div>
-        <div id="final-scores" class="go-scores"></div>
-        <div id="go-teams" class="go-teams hidden"></div>
+        <div class="go-body">
+          <div id="go-chart" class="go-chart"></div>
+          <div class="go-side">
+            <div id="final-scores" class="go-scores"></div>
+            <div id="go-teams" class="go-teams hidden"></div>
+          </div>
+        </div>
         <div id="record-league" class="go-record hidden">
           <select id="record-league-select" aria-label="League"><option value="">Choose league…</option></select>
           <button id="btn-record" class="primary" type="button">Record result</button>
@@ -216,6 +230,7 @@
 <div id="confirm-scrim" class="scrim confirm-scrim hidden"></div>
 <div id="confirm" class="modal confirm hidden" role="alertdialog" aria-modal="true"></div>
 
+<script src="/static/chart.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -157,6 +157,7 @@ function renderSessions() {
 async function resumeSession(sess) {
   try {
     const r = await gapi("/rejoin", "POST", { game_id: sess.game_id, token: sess.token });
+    if (r.player_id !== sess.player_id) removeSession(sess);
     enterGame({
       game_id: r.game_id,
       player_id: r.player_id,
@@ -223,6 +224,7 @@ function connectWS() {
   ws.onmessage = (ev) => {
     try {
       S.state = JSON.parse(ev.data);
+      followSeat(S.state.player_id);
       renderGame();
     } catch { /* ignore */ }
   };
@@ -234,6 +236,15 @@ function connectWS() {
     }, 3000);
   };
   ws.onerror = () => { if (S.ws === ws) ws.close(); };
+}
+
+/* Seats can move in the lobby (shuffle); keep the stored session pointing at ours. */
+function followSeat(seat) {
+  const sess = S.session;
+  if (!sess || typeof seat !== "number" || seat === sess.player_id) return;
+  removeSession(sess);
+  S.session = { ...sess, player_id: seat };
+  saveSession(S.session);
 }
 
 /* ----- cards ----- */
@@ -355,16 +366,17 @@ function avatarHue(name) {
   for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return h;
 }
-function avatarHTML(name) {
-  return `<div class="avatar" style="--hue:${avatarHue(name)}">${esc(initials(name))}</div>`;
+function avatarHTML(name, hue) {
+  return `<div class="avatar" style="--hue:${hue ?? avatarHue(name)}">${esc(initials(name))}</div>`;
 }
-function playerBadge(st, i) {
+function lobbySeat(st, i, moved) {
   const name = st.players[i];
   const me = st.player_id === i;
-  return `<div class="pbadge ${me ? "me" : ""}">
+  return `<div class="lseat ${me ? "me" : ""} ${moved ? "moved" : ""}" style="--d:${i * 70}ms">
+    <span class="lseat-no">${i + 1}</span>
     ${avatarHTML(name)}
-    <div><div class="pbadge-name">${esc(name)}${me ? " (you)" : ""}</div>
-    <div class="pbadge-meta">Seat ${i + 1}</div></div>
+    <span class="lseat-name">${esc(name)}${me ? ` <span class="you-tag">you</span>` : ""}</span>
+    ${st.host === i ? `<span class="host-badge">${CROWN_ICON}Host</span>` : ""}
   </div>`;
 }
 
@@ -730,6 +742,22 @@ $("btn-bid").onclick = () => doAction({ action: "bid", value: S.bidVal }).then((
 document.querySelectorAll(".suit-picker .suit").forEach((b) =>
   b.onclick = () => doAction({ action: "choose_trump", value: 0, suit: b.dataset.suit }));
 
+$("btn-shuffle").onclick = async () => {
+  const btn = $("btn-shuffle");
+  btn.disabled = true;
+  try { await gapi(`/${S.session.game_id}/shuffle`, "POST", { token: S.session.token }); }
+  catch (e) { alertMsg(e.message); }
+  btn.disabled = false;
+};
+$("shuffle-on-start").onchange = async (e) => {
+  try {
+    await gapi(`/${S.session.game_id}/lobby-settings`, "POST",
+      { token: S.session.token, shuffle_on_start: e.target.checked });
+  } catch (err) {
+    alertMsg(err.message);
+    e.target.checked = !e.target.checked;
+  }
+};
 $("btn-start").onclick = async () => {
   try { await gapi(`/${S.session.game_id}/start`, "POST"); }
   catch (e) { alertMsg(e.message); }
@@ -742,8 +770,43 @@ $("btn-ready").onclick = async () => {
 };
 
 /* ----- lobby: league link + custom teams ----- */
+function lobbyMoves(st) {
+  const gid = S.session.game_id;
+  const prev = S.lobbyOrder;
+  S.lobbyOrder = { gid, names: st.players.slice() };
+  const now = Date.now();
+  if (prev && prev.gid === gid && prev.names.length === st.players.length
+      && prev.names.some((n, i) => n !== st.players[i])
+      && [...prev.names].sort().join("\n") === [...st.players].sort().join("\n")) {
+    S.lobbyMoved = { gid, until: now + 1600, names: new Set(st.players.filter((n, i) => prev.names[i] !== n)) };
+    const seatOf = Object.fromEntries(st.players.map((n, i) => [n, i]));
+    S.draftTeams.forEach((t) => {
+      t.player_indices = t.player_indices.map((i) => seatOf[prev.names[i]]).filter((i) => i !== undefined);
+    });
+  }
+  const m = S.lobbyMoved;
+  return m && m.gid === gid && m.until > now ? m.names : new Set();
+}
+
 function renderLobby(st) {
-  $("lobby-players").innerHTML = st.players.map((_, i) => playerBadge(st, i)).join("");
+  const moved = lobbyMoves(st);
+  const isHost = st.host === st.player_id || st.host == null;
+  $("lobby-players").innerHTML = st.players.map((n, i) => lobbySeat(st, i, moved.has(n))).join("");
+  const tags = [];
+  if (st.rematch_of) tags.push(`<span class="pill">Rematch</span>`);
+  if (st.seats_shuffled) tags.push(`<span class="pill pill-accent">🔀 Seats shuffled</span>`);
+  if (st.shuffle_on_start && !isHost) tags.push(`<span class="pill">Shuffle at start</span>`);
+  $("lobby-tags").innerHTML = tags.join("");
+  const waiting = st.waiting_for || [];
+  $("lobby-waiting").classList.toggle("hidden", !waiting.length);
+  $("lobby-waiting").innerHTML = `<span class="hint">Waiting for</span>${waiting.map((n) =>
+    `<span class="wait-chip">${avatarHTML(n)}<span>${esc(n)}</span></span>`).join("")}`;
+  $("lobby-tools").classList.toggle("hidden", !isHost);
+  $("btn-shuffle").disabled = st.players.length < 2;
+  $("shuffle-on-start").checked = !!st.shuffle_on_start;
+  const startBtn = $("btn-start");
+  startBtn.classList.toggle("primary", isHost);
+  startBtn.classList.toggle("ghost", !isHost);
   renderLeagueLink(st);
   const linked = !!(S.link && S.link.league_id);
   $("custom-teams").classList.toggle("hidden", linked);
@@ -760,7 +823,8 @@ function renderLeagueLink(st) {
     `<option value="${esc(l.id)}" ${l.id === cur ? "selected" : ""}>${esc(l.name)}</option>`).join("");
   sel.value = leagueById(cur) ? cur : "";
   const league = leagueById(cur);
-  if (league && S.link.seats.length !== st.players.length) loadGameLink();
+  if (league && (S.link.seats.length !== st.players.length
+      || S.link.seats.some((x, i) => x.name !== st.players[i]))) loadGameLink();
   if (!league) {
     $("link-seats").innerHTML = "";
     $("link-teams").innerHTML = "";
@@ -971,6 +1035,45 @@ async function refreshTeamScores() {
   teamScoreTimer = setTimeout(refreshTeamScores, 8000);
 }
 
+/* ----- points journey ----- */
+const journeys = new Map();
+function mountJourney(root, series, key, opts = {}) {
+  const prev = journeys.get(root);
+  if (prev && prev.key === key) return;
+  const ctl = PointsChart.mount(root, series, opts);
+  journeys.set(root, { key, series, opts, width: root.clientWidth, ctl });
+}
+function dropJourney(root) {
+  journeys.delete(root);
+  root.innerHTML = "";
+}
+let journeyResize = null;
+window.addEventListener("resize", () => {
+  clearTimeout(journeyResize);
+  journeyResize = setTimeout(() => {
+    journeys.forEach((j, root) => {
+      if (!root.isConnected) { journeys.delete(root); return; }
+      if (!root.offsetParent) return;
+      if (Math.abs(root.clientWidth - j.width) < 24) return;
+      j.ctl = PointsChart.mount(root, j.series, { ...j.opts, animate: false });
+      j.width = root.clientWidth;
+    });
+  }, 150);
+});
+
+function seatHues(names) {
+  return PointsChart.distinctHues(names.map(avatarHue));
+}
+function historySeries(st, hues) {
+  const hist = st.history || [];
+  return st.players.map((name, i) => ({
+    name,
+    hue: hues[i],
+    points: hist.map((h) => (h.deltas || [])[i] ?? 0),
+    totals: hist.map((h) => (h.scores || [])[i] ?? 0),
+  }));
+}
+
 /* ----- game over ----- */
 function renderGameOver(st) {
   const order = st.players.map((_, i) => i).sort((a, b) => st.scores[b] - st.scores[a]);
@@ -982,6 +1085,12 @@ function renderGameOver(st) {
   const rounds = (st.history || []).length;
   $("go-sub").textContent = [plural(rounds, "round"), MODE_LABEL[st.bidding_mode]].filter(Boolean).join(" · ");
 
+  const hues = seatHues(st.players);
+  const chart = $("go-chart");
+  chart.classList.toggle("hidden", !rounds);
+  if (rounds) mountJourney(chart, historySeries(st, hues), `${S.session.game_id}:${rounds}`);
+  renderRematch(st);
+
   const ts = S.teamScores || [];
   const teamOfSeat = {};
   ts.forEach((t) => t.player_indices.forEach((i) => { teamOfSeat[i] = t; }));
@@ -990,7 +1099,7 @@ function renderGameOver(st) {
     const rank = order.findIndex((j) => st.scores[j] === st.scores[i]) + 1;
     return `<div class="go-row ${winners.includes(i) ? "top" : ""} ${i === st.player_id ? "me" : ""}">
       <span class="rank r${rank}">${rank}</span>
-      ${avatarHTML(st.players[i])}
+      ${avatarHTML(st.players[i], hues[i])}
       <span class="go-name">${esc(st.players[i])}${t ? teamChip(t.name, t.color) : ""}</span>
       <span class="go-score">${st.scores[i]}</span>
     </div>`;
@@ -1012,6 +1121,48 @@ function renderGameOver(st) {
     }).join("");
   }
   renderRecordBox();
+}
+
+function renderRematch(st) {
+  const box = $("go-rematch");
+  const rm = st.rematch;
+  if (!rm) {
+    box.innerHTML = `<label class="rm-shuffle"><input type="checkbox" id="rm-shuffle" ${S.rmShuffle === false ? "" : "checked"}>
+        <span>Shuffle seats</span></label>
+      <button class="primary" type="button" id="btn-rematch">Rematch</button>`;
+    $("rm-shuffle").onchange = (e) => { S.rmShuffle = e.target.checked; };
+    $("btn-rematch").onclick = () => goRematch(true);
+    return;
+  }
+  const joined = rm.joined || [];
+  const inIt = joined.includes(st.player_id);
+  const stack = joined.length
+    ? `<span class="av-stack" title="${esc(joined.map((i) => st.players[i]).join(", "))}">${joined.map((i) => avatarHTML(st.players[i])).join("")}</span>
+       <span class="rm-count">${joined.length}/${st.players.length}</span>`
+    : "";
+  if (rm.started && !inIt) {
+    box.innerHTML = `${stack}<span class="pill">Rematch started</span>`;
+    return;
+  }
+  box.innerHTML = `${stack}<button class="primary" type="button" id="btn-rematch-join">${inIt ? "Back to rematch" : "Join rematch"}</button>`;
+  $("btn-rematch-join").onclick = () => goRematch(false);
+}
+
+async function goRematch(create) {
+  const sess = S.session;
+  if (!sess) return;
+  const btn = $(create ? "btn-rematch" : "btn-rematch-join");
+  if (btn) btn.disabled = true;
+  try {
+    const r = create
+      ? await gapi(`/${sess.game_id}/rematch`, "POST", { token: sess.token, shuffle: S.rmShuffle !== false })
+      : await gapi(`/${sess.game_id}/rematch/join`, "POST", { token: sess.token });
+    openScores(false);
+    enterGame({ game_id: r.game_id, player_id: r.player_id, token: r.token, name: r.name });
+  } catch (e) {
+    alertMsg(e.message);
+    if (btn) btn.disabled = false;
+  }
 }
 
 function renderRecordBox() {
@@ -1356,6 +1507,13 @@ function renderGamesTab() {
   pane.querySelectorAll("[data-open-game]").forEach((b) => { b.onclick = () => openGameDetail(b.dataset.openGame); });
 }
 
+function trumpCell(r) {
+  if (r.trump_source === "jester") return `<span class="rt-nt" title="Jester flipped">J</span>`;
+  if (!r.trump) return `<span class="rt-nt" title="No trump">–</span>`;
+  const who = r.trump_source === "wizard" ? `Wizard flipped${r.trump_chosen_by ? ` · ${r.trump_chosen_by} chose` : ""}` : SUIT_NAME[r.trump];
+  return `<span class="rt-suit ${isRedSuit(r.trump) ? "red" : ""}" title="${esc(who)}">${SUIT_SYM[r.trump]}</span>${r.trump_source === "wizard" ? `<sup class="rt-w">W</sup>` : ""}`;
+}
+
 function openGameDetail(rid) {
   const L = LG.league;
   const g = L.games.find((x) => x.id === rid);
@@ -1364,17 +1522,31 @@ function openGameDetail(rid) {
   const top = order.length ? order[0].score : null;
   const rankOf = (p) => order.findIndex((q) => q.score === p.score) + 1;
   const bySeat = [...g.players].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
-  const seatIdx = bySeat.map((p) => p.seat);
   const rounds = g.rounds || [];
-  const roundTable = rounds.length && seatIdx.every((s) => s != null) ? `
-    <h3>Rounds</h3>
-    <div class="table-scroll"><table class="history">
-      <thead><tr><th>Rd</th>${bySeat.map((p) => `<th title="${esc(p.name)}">${esc(p.name.slice(0, 7))}</th>`).join("")}</tr></thead>
-      <tbody>${rounds.map((r) => `<tr><td class="rnd">${r.round}</td>${seatIdx.map((s) => {
-        const d = r.deltas[s];
-        return `<td><span class="d ${d >= 0 ? "pos" : "neg"}">${d > 0 ? "+" : ""}${d}</span><span class="bw">${r.tricks[s]}/${r.bids[String(s)] ?? "–"}</span></td>`;
-      }).join("")}</tr>`).join("")}
-      <tr><td class="rnd">Σ</td>${bySeat.map((p) => `<td><strong>${p.score}</strong></td>`).join("")}</tr></tbody>
+  const perHand = !g.final_only && rounds.length && bySeat.every((p) => p.seat != null);
+  const hues = seatHues(bySeat.map((p) => p.name));
+  const lineOf = (r, seat) => (r.players || []).find((l) => l.seat === seat);
+  const roundTable = perHand ? `
+    <h3>Hand by hand</h3>
+    <div class="table-scroll rt-scroll"><table class="rt">
+      <thead><tr><th class="rt-hand">#</th><th class="rt-trump">Trump</th>${bySeat.map((p, k) => `
+        <th title="${esc(p.name)}"><span class="rt-who">${avatarHTML(p.name, hues[k])}<span>${esc(p.name)}</span></span></th>`).join("")}</tr></thead>
+      <tbody>${rounds.map((r) => `<tr>
+        <td class="rt-hand">${r.round}${r.cards_dealt && r.cards_dealt !== r.round ? `<small>${r.cards_dealt} cards</small>` : ""}</td>
+        <td class="rt-trump">${trumpCell(r)}</td>
+        ${bySeat.map((p) => {
+          const l = lineOf(r, p.seat) || { points: 0, total: 0 };
+          const exact = l.bid != null && l.tricks != null && l.bid === l.tricks;
+          return `<td class="rt-cell ${r.dealer_seat === p.seat ? "dealt" : ""}">
+            <span class="rt-pts ${l.points >= 0 ? "pos" : "neg"}">${l.points > 0 ? "+" : ""}${l.points}</span>
+            <span class="rt-tot">${l.total}</span>
+            ${l.bid != null || l.tricks != null ? `<span class="rt-bt ${exact ? "ok" : ""}" title="Won ${l.tricks ?? "–"} · bid ${l.bid ?? "–"}">${l.tricks ?? "–"}/${l.bid ?? "–"}</span>` : ""}
+            ${r.dealer_seat === p.seat ? `<span class="rt-dealer" title="Dealer">D</span>` : ""}
+          </td>`;
+        }).join("")}
+      </tr>`).join("")}</tbody>
+      <tfoot><tr><td class="rt-hand">Final</td><td></td>${bySeat.map((p) => `
+        <td class="rt-cell"><span class="rt-final">${p.score}</span>${rankBadge(rankOf(p))}</td>`).join("")}</tr></tfoot>
     </table></div>` : "";
   const teamIds = Object.keys(g.team_scores).sort((a, b) => g.team_scores[b] - g.team_scores[a]);
   const teams = teamIds.length ? `
@@ -1401,6 +1573,7 @@ function openGameDetail(rid) {
       ${g.bidding_mode ? `<span class="pill">${MODE_LABEL[g.bidding_mode]}</span>` : ""}
       ${g.rounds_played ? `<span class="pill">${plural(g.rounds_played, "round")}</span>` : ""}
       <span class="pill">${g.source === "manual" ? "Added by hand" : "Played here"}</span>
+      ${g.final_only ? `<span class="pill pill-muted">Final only</span>` : ""}
       ${g.edited_at ? `<span class="pill">Edited ${esc(fmtDate(g.edited_at, { month: "short", day: "numeric" }))}</span>` : ""}
     </div>
     <div class="gd-players">${order.map((p) => {
@@ -1409,12 +1582,13 @@ function openGameDetail(rid) {
       const tName = g.team_names[p.team_id] || (t && t.name);
       const tColor = g.team_colors[p.team_id] || (t && t.color);
       return `<div class="go-row ${p.score === top ? "top" : ""}">
-        ${rankBadge(r)}${avatarHTML(p.name)}
+        ${rankBadge(r)}${avatarHTML(p.name, perHand ? hues[bySeat.indexOf(p)] : undefined)}
         <span class="go-name">${esc(p.name)}${tName ? teamChip(tName, tColor) : ""}${p.league_player_id ? "" : `<span class="tchip none">Guest</span>`}</span>
         ${p.rounds_bid ? `<span class="gd-bids" title="Bids made">${p.bids_made}/${p.rounds_bid}</span>` : ""}
         <span class="go-score">${p.score}</span>
       </div>`;
     }).join("")}</div>
+    ${perHand ? `<div class="gd-chart" id="gd-chart"></div>` : ""}
     ${teams}
     ${roundTable}
     ${g.notes ? `<h3>Notes</h3><p class="gd-notes">${esc(g.notes)}</p>` : ""}
@@ -1422,6 +1596,16 @@ function openGameDetail(rid) {
       <button type="button" class="danger-ghost" data-act="delete">Delete</button>
       <button type="button" class="primary" data-act="edit">Edit</button>
     </div>`, "modal-wide");
+  const chart = m.querySelector("#gd-chart");
+  if (chart) {
+    const series = bySeat.map((p, k) => ({
+      name: p.name,
+      hue: hues[k],
+      points: rounds.map((r) => (lineOf(r, p.seat) || {}).points ?? 0),
+      totals: rounds.map((r) => (lineOf(r, p.seat) || {}).total ?? 0),
+    }));
+    requestAnimationFrame(() => mountJourney(chart, series, `${g.id}:${g.edited_at || ""}:${Date.now()}`));
+  }
   m.querySelector('[data-act="edit"]').onclick = () => openResultForm(g);
   m.querySelector('[data-act="delete"]').onclick = async () => {
     const ok = await confirmDialog({
@@ -1442,12 +1626,27 @@ function openResultForm(rec) {
   const L = LG.league;
   if (!L) return;
   const players = Object.values(L.players).sort(byName);
+  let nextKey = 0;
+  const recRounds = rec && !rec.final_only ? rec.rounds || [] : [];
+  let perHand = recRounds.length > 0;
+  let hands = recRounds.length;
+  let rmeta = recRounds.map((r) => ({
+    cards_dealt: r.cards_dealt, trump: r.trump, dealerKey: r.dealer_seat != null ? `s${r.dealer_seat}` : null,
+  }));
+  const blank = () => ({ key: `n${nextKey++}`, pid: "", name: "", score: "", bids: "", hand: [], meta: [] });
   let lines = rec
-    ? rec.players.map((p) => {
+    ? rec.players.map((p, k) => {
         const known = p.league_player_id && L.players[p.league_player_id];
-        return { pid: known ? p.league_player_id : "", name: known ? "" : p.name, score: p.score, bids: p.rounds_bid ? p.bids_made : "" };
+        const own = recRounds.map((r) => (r.players || []).find((l) => l.seat === p.seat) || {});
+        return {
+          key: p.seat != null ? `s${p.seat}` : `r${k}`,
+          pid: known ? p.league_player_id : "", name: known ? "" : p.name,
+          score: p.score, bids: p.rounds_bid ? p.bids_made : "",
+          hand: own.map((l) => l.points ?? 0),
+          meta: own.map((l) => ({ bid: l.bid ?? null, tricks: l.tricks ?? null })),
+        };
       })
-    : [0, 1, 2, 3].map(() => ({ pid: "", name: "", score: "", bids: "" }));
+    : [0, 1, 2, 3].map(blank);
 
   const m = openModal(`
     <form id="result-form" class="rf" novalidate>
@@ -1467,7 +1666,11 @@ function openResultForm(rec) {
       </div>
       <div class="rf-head"><span>Player</span><span>Score</span><span>Bids made</span><span></span></div>
       <div id="rf-lines" class="rf-lines"></div>
-      <button type="button" id="rf-add-line" class="ghost rf-add">+ Player</button>
+      <div class="rf-row">
+        <button type="button" id="rf-add-line" class="ghost rf-add">+ Player</button>
+        <label class="check-toggle"><input type="checkbox" id="rf-perhand" ${perHand ? "checked" : ""}><span>Per-hand scores</span></label>
+      </div>
+      <div id="rf-hands" class="rf-hands hidden"></div>
       <label>Notes<textarea id="rf-notes" rows="2" maxlength="500">${esc(rec ? rec.notes : "")}</textarea></label>
       <div id="rf-error" class="alert hidden"></div>
       <div class="modal-actions">
@@ -1476,13 +1679,63 @@ function openResultForm(rec) {
       </div>
     </form>`, "modal-wide");
 
+  const num = (v) => (v === "" || v == null || !Number.isFinite(Number(v)) ? 0 : Math.round(Number(v)));
+  const lineName = (ln, i) => (ln.pid && L.players[ln.pid] ? L.players[ln.pid].name : ln.name.trim()) || `Player ${i + 1}`;
   const readLines = () => {
-    lines = [...m.querySelectorAll(".rf-line")].map((row) => ({
-      pid: row.querySelector("[data-f=pid]").value,
-      name: row.querySelector("[data-f=name]").value,
-      score: row.querySelector("[data-f=score]").value,
-      bids: row.querySelector("[data-f=bids]").value,
-    }));
+    m.querySelectorAll(".rf-line").forEach((row, i) => {
+      const ln = lines[i];
+      ln.pid = row.querySelector("[data-f=pid]").value;
+      ln.name = row.querySelector("[data-f=name]").value;
+      ln.score = row.querySelector("[data-f=score]").value;
+      ln.bids = row.querySelector("[data-f=bids]").value;
+    });
+    m.querySelectorAll("[data-hand]").forEach((inp) => {
+      const [r, k] = inp.dataset.hand.split(":").map(Number);
+      if (lines[k]) lines[k].hand[r] = inp.value === "" ? "" : num(inp.value);
+    });
+  };
+  const recalc = () => {
+    if (!perHand) return;
+    lines.forEach((ln, k) => {
+      let run = 0;
+      for (let r = 0; r < hands; r++) {
+        const inp = m.querySelector(`[data-hand="${r}:${k}"]`);
+        run += num(inp ? inp.value : ln.hand[r]);
+        const cell = m.querySelector(`[data-run="${r}:${k}"]`);
+        if (cell) cell.textContent = run;
+      }
+      const score = m.querySelectorAll(".rf-line [data-f=score]")[k];
+      if (score) score.value = run;
+      const foot = m.querySelector(`[data-total="${k}"]`);
+      if (foot) foot.textContent = run;
+    });
+  };
+  const drawHands = () => {
+    const box = m.querySelector("#rf-hands");
+    box.classList.toggle("hidden", !perHand);
+    m.querySelector("#rf-rounds").disabled = perHand;
+    if (perHand) m.querySelector("#rf-rounds").value = hands;
+    if (!perHand) { box.innerHTML = ""; return; }
+    box.innerHTML = `
+      <div class="table-scroll"><table class="rf-hand-table">
+        <thead><tr><th>#</th>${lines.map((ln, k) => `<th title="${esc(lineName(ln, k))}">${esc(lineName(ln, k))}</th>`).join("")}</tr></thead>
+        <tbody>${Array.from({ length: hands }, (_, r) => `<tr>
+          <td class="rf-hn">${r + 1}</td>
+          ${lines.map((ln, k) => `<td>
+            <input data-hand="${r}:${k}" type="number" inputmode="numeric" step="10" value="${esc(ln.hand[r] ?? "")}" placeholder="0" aria-label="Hand ${r + 1}, ${esc(lineName(ln, k))}">
+            <span class="rf-run" data-run="${r}:${k}"></span>
+          </td>`).join("")}
+        </tr>`).join("")}</tbody>
+        <tfoot><tr><td></td>${lines.map((_, k) => `<td data-total="${k}"></td>`).join("")}</tr></tfoot>
+      </table></div>
+      <div class="rf-hand-btns">
+        <button type="button" class="ghost" id="rf-hand-minus" ${hands <= 1 ? "disabled" : ""}>− Hand</button>
+        <button type="button" class="ghost" id="rf-hand-plus" ${hands >= 20 ? "disabled" : ""}>+ Hand</button>
+      </div>`;
+    box.querySelectorAll("[data-hand]").forEach((inp) => { inp.oninput = recalc; });
+    box.querySelector("#rf-hand-minus").onclick = () => { readLines(); hands = Math.max(1, hands - 1); drawHands(); };
+    box.querySelector("#rf-hand-plus").onclick = () => { readLines(); hands = Math.min(20, hands + 1); drawHands(); };
+    recalc();
   };
   const drawLines = () => {
     m.querySelector("#rf-lines").innerHTML = lines.map((ln, i) => `
@@ -1495,7 +1748,7 @@ function openResultForm(rec) {
           </select>
           <input data-f="name" placeholder="Name" maxlength="32" value="${esc(ln.name)}" class="${!ln.pid && ln.name ? "" : "hidden"}" aria-label="New player name">
         </div>
-        <input data-f="score" type="number" inputmode="numeric" step="10" value="${esc(ln.score)}" aria-label="Score" placeholder="0">
+        <input data-f="score" type="number" inputmode="numeric" step="10" value="${esc(ln.score)}" aria-label="Score" placeholder="0" ${perHand ? "readonly tabindex=\"-1\" class=\"rf-auto\"" : ""}>
         <input data-f="bids" type="number" inputmode="numeric" min="0" max="20" value="${esc(ln.bids)}" aria-label="Bids made" placeholder="—">
         <button type="button" class="ghost icon-btn" data-rm-line="${i}" aria-label="Remove player" ${lines.length <= 3 ? "disabled" : ""}>✕</button>
       </div>`).join("");
@@ -1505,18 +1758,34 @@ function openResultForm(rec) {
         name.classList.toggle("hidden", sel.value !== "__new");
         if (sel.value === "__new") name.focus();
         else name.value = "";
+        if (perHand) { readLines(); drawHands(); }
       };
     });
+    m.querySelectorAll("[data-f=name]").forEach((inp) => {
+      inp.onchange = () => { if (perHand) { readLines(); drawHands(); } };
+    });
     m.querySelectorAll("[data-rm-line]").forEach((b) => {
-      b.onclick = () => { readLines(); lines.splice(+b.dataset.rmLine, 1); drawLines(); };
+      b.onclick = () => { readLines(); lines.splice(+b.dataset.rmLine, 1); drawLines(); drawHands(); };
     });
     m.querySelector("#rf-add-line").disabled = lines.length >= 6;
   };
   drawLines();
+  drawHands();
   m.querySelector("#rf-add-line").onclick = () => {
     readLines();
-    if (lines.length < 6) lines.push({ pid: "", name: "", score: "", bids: "" });
+    if (lines.length < 6) lines.push(blank());
     drawLines();
+    drawHands();
+  };
+  m.querySelector("#rf-perhand").onchange = (e) => {
+    readLines();
+    perHand = e.target.checked;
+    if (perHand && !hands) {
+      const n = lines.filter((ln) => ln.pid || ln.name.trim()).length || lines.length;
+      hands = Math.min(20, num(m.querySelector("#rf-rounds").value) || MAX_ROUNDS[n] || 10);
+    }
+    drawLines();
+    drawHands();
   };
 
   const showErr = (msg) => {
@@ -1527,25 +1796,43 @@ function openResultForm(rec) {
   m.querySelector("#result-form").onsubmit = async (e) => {
     e.preventDefault();
     readLines();
-    const filled = lines.filter((ln) => ln.pid || ln.name.trim() || ln.score !== "");
+    const filled = lines.filter((ln) => ln.pid || ln.name.trim() || (!perHand && ln.score !== ""));
     if (filled.length < 3) return showErr("Enter at least 3 players.");
     const out = [];
     for (const ln of filled) {
       const isNew = !ln.pid || ln.pid === "__new";
       if (isNew && !ln.name.trim()) return showErr("Choose a player for every row.");
-      if (ln.score === "" || !Number.isFinite(Number(ln.score))) return showErr("Enter a score for every player.");
+      if (!perHand && (ln.score === "" || !Number.isFinite(Number(ln.score)))) return showErr("Enter a score for every player.");
       out.push({
         league_player_id: isNew ? null : ln.pid,
         name: isNew ? ln.name.trim() : null,
-        score: Math.round(Number(ln.score)),
+        score: perHand ? null : Math.round(Number(ln.score)),
         bids_made: ln.bids === "" ? null : Math.round(Number(ln.bids)),
+      });
+    }
+    let rounds = recRounds.length ? [] : null;
+    if (perHand) {
+      rounds = Array.from({ length: hands }, (_, r) => {
+        const meta = rmeta[r] || {};
+        const dealer = meta.dealerKey ? filled.findIndex((ln) => ln.key === meta.dealerKey) : -1;
+        return {
+          cards_dealt: meta.cards_dealt ?? null,
+          dealer: dealer >= 0 ? dealer : null,
+          trump: meta.trump ?? null,
+          lines: filled.map((ln) => ({
+            points: num(ln.hand[r]),
+            bid: (ln.meta[r] || {}).bid ?? null,
+            tricks: (ln.meta[r] || {}).tricks ?? null,
+          })),
+        };
       });
     }
     const body = {
       played_at: m.querySelector("#rf-date").value || null,
       bidding_mode: m.querySelector("#rf-mode").value || null,
-      rounds_played: Number(m.querySelector("#rf-rounds").value || 0),
+      rounds_played: perHand ? hands : Number(m.querySelector("#rf-rounds").value || 0),
       players: out,
+      rounds,
       notes: m.querySelector("#rf-notes").value.trim(),
     };
     try {
@@ -1700,6 +1987,9 @@ if (params.get("rejoin") && params.get("token")) {
     player_id: 0,
     name: params.get("name") || "",
   });
+  ["rejoin", "token", "name"].forEach((k) => params.delete(k));
+  const rest = params.toString();
+  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
 } else {
   try {
     const active = JSON.parse(sessionStorage.getItem("wizard_active") || "null");
