@@ -138,6 +138,18 @@ def test_failed_write_resyncs_cache_and_raises():
     assert [r.game_id for r in store.get_league(league.id).games] == ["abcd1234"]
 
 
+def test_migrate_json_file_into_firestore(tmp_path):
+    from app.services.migrate_leagues import migrate
+
+    path = tmp_path / "league.json"
+    league, rec = _populate(LeagueStore(JsonBackend(path)))
+    client = FakeFirestoreClient()
+    assert migrate(path, FirestoreBackend(client)) == (1, 1)
+    assert migrate(path, FirestoreBackend(client)) == (1, 1)
+    _assert_round_trip(LeagueStore(FirestoreBackend(client)), league, rec)
+    assert len(client.docs) == 2
+
+
 SERVICE_ACCOUNT = {"type": "service_account", "project_id": "demo-wizard", "client_email": "x@y"}
 
 

@@ -12,6 +12,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 client = ["rich", "websockets"]
+firebase = ["firebase-admin>=6.5"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

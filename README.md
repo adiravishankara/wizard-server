@@ -8,7 +8,7 @@ This is not a serverless app. Games live in the server process’s memory, and e
 
 - **Browser UI** at `/` (`app/static/`) — create/join a game, bid, play tricks, optional teams/leagues
 - **HTTP + WebSocket API** under `/api/game` — join, rejoin, start, ready, action, `/ws/{game_id}/{player_id}`
-- **League/team scoring** under `/api/league` — persisted to `data/wizard_league.json`
+- **Leagues** under `/api/league` — rosters, teams, recorded results, team standings and a player leaderboard. Stored in **Firebase Firestore** in production, or `data/wizard_league.json` locally (see [DEPLOY.md](DEPLOY.md))
 - **Terminal client** `client.py` (needs `rich` and `websockets`)
 
 There is no Docker-in-production image published, no JWT/OAuth, no Vercel Blob puzzles, and no player-profile CRUD. The old README described those; they are not here.
@@ -69,17 +69,29 @@ The repo includes a `Dockerfile` and a Render blueprint (`render.yaml`).
 1. Create a [Render](https://render.com) account (GitHub login is easiest) and grant it access to `adiravishankara/wizard-server`.
 2. In the Render dashboard: **New + → Blueprint**, pick this repo, and apply the `wizard` web service.
    - Or **New + → Web Service**, connect the repo, runtime **Docker**, and leave the start command to the Dockerfile (`uvicorn` on `$PORT`).
-3. No API keys or env vars are required. Render sets `PORT`.
-4. After the first deploy, copy the public URL (e.g. `https://wizard-xxxx.onrender.com`) and put it in this README so friends have a stable link.
+3. Leagues are stored in Firebase Firestore. Follow [DEPLOY.md](DEPLOY.md) to create the Firebase project and paste the service-account key into `FIREBASE_CREDENTIALS_B64` when Render asks. Render sets `PORT`.
+4. Check `https://<your-service>.onrender.com/health` shows `"league_store": "firestore"`.
+5. After the first deploy, copy the public URL (e.g. `https://wizard-xxxx.onrender.com`) and put it in this README so friends have a stable link.
 
-Free Render web services **sleep after idle time** and **lose all in-memory games** when they sleep or restart. For a game night, open the URL once to wake it, then keep it open. A paid instance stays up.
+Free Render web services **sleep after idle time** and **lose all in-memory games** when they sleep or restart. League data and recorded results are in Firestore and survive. For a game night, open the URL once to wake it, then keep it open. A paid instance stays up.
 
-Any other container host (Fly.io, Railway) works the same way: build the Dockerfile, bind to `$PORT`, persist the disk if you care about league JSON.
+Any other container host (Fly.io, Railway) works the same way: build the Dockerfile, bind to `$PORT`, and set the Firebase variables from [DEPLOY.md](DEPLOY.md).
 
 ```bash
 docker build -t wizard .
-docker run --rm -p 8000:8000 -e PORT=8000 wizard
+docker run --rm -p 8000:8000 -e PORT=8000 -e LEAGUE_STORE=json wizard
 ```
+
+## Leagues
+
+Open **Leagues** in the top bar.
+
+- **Players** — leaderboard: games, wins (shared top scores count as ties), average and best score, and bid accuracy (rounds where tricks matched the bid) for every league player, on a team or not.
+- **Teams** — team standings from recorded results.
+- **Games** — every recorded result; open one for the winner, players, scores, bidding mode, rounds and the round-by-round breakdown. **Add result** enters a game played elsewhere; results can be edited or deleted.
+- **Roster** — add players and teams, move players between teams.
+
+In a game lobby, pick a league and each seat is matched to a league player by name (change any match from the list). Teams come from the league rosters, so it does not matter who sits where. At game over, the panel shows the team result and **Record to league** saves the full summary.
 
 ## How friends join
 
@@ -97,12 +109,13 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-Covers 3- and 5-player games, all four bidding modes through at least two rounds, and every player rejoining after a drop.
+Covers 3- and 5-player games, all four bidding modes through at least two rounds, every player rejoining after a drop, the trump rules, and leagues (JSON and faked Firestore storage, stats, results, seat links). Tests never contact Firebase.
 
 ## Limitations
 
 - **Games are in memory only.** Deploy/restart/sleep = everyone is kicked and cannot rejoin that game.
-- **Leagues persist** to `data/` on the server disk; that file is not a full game save.
+- **Leagues persist** to Firestore (or `data/wizard_league.json` locally). A finished game is saved when someone records it to a league; unrecorded games are not saved.
+- The league cache assumes **one server instance**; don't scale the Render service out.
 - **No login.** Anyone with the game code can join until the game starts (max 6).
 - **Blind** is `BiddingMode.SECRET` in the API (labeled **Blind / Canadian** in the UI). Other players’ bids are hidden until the hand ends; you still see your own. The separate **Canadian (even-total)** mode is sequential bidding with the last-bidder restriction, and those bids are visible.
 - Standard published Wizard often applies the “last bidder cannot make totals even” rule to normal play. Here that restriction is **only** on the Canadian even-total mode; sequential/normal does not enforce it.

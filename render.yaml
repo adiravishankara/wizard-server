@@ -7,3 +7,12 @@ services:
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      # League data lives in Firestore. With "firestore" the server refuses to
+      # start without working credentials instead of silently writing to the
+      # container disk (which Render wipes on every deploy).
+      - key: LEAGUE_STORE
+        value: firestore
+      # Base64 of the Firebase service-account JSON. Render asks for it when
+      # the blueprint is applied; see DEPLOY.md.
+      - key: FIREBASE_CREDENTIALS_B64
+        sync: false
