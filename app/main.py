@@ -2,14 +2,20 @@ import os
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import game, league
+from app.services.league_store import StoreError, store as league_store
 
 app = FastAPI(title="Wizard Game API")
+
+
+@app.exception_handler(StoreError)
+async def store_error_handler(_request: Request, exc: StoreError):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +35,7 @@ if STATIC_DIR.exists():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "league_store": league_store.backend_name}
 
 
 @app.get("/")

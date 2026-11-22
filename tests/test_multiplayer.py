@@ -224,7 +224,7 @@ def test_unknown_game_code_does_not_create_a_new_game(client):
 
 
 def test_health_and_index(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/health").json() == {"status": "ok", "league_store": "json"}
     home = client.get("/")
     assert home.status_code == 200
     assert "Wizard" in home.text

@@ -1,4 +1,6 @@
+import os
 import socket
+import tempfile
 import threading
 import time
 
@@ -6,10 +8,24 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.services.connection_manager import manager
-from app.services.game_store import games
-from app.services.trick_hold import clear_all as clear_trick_holds
+# Never touch Firebase or the dev data file from tests, even if the shell has
+# credentials exported: the store is chosen when app.main is imported.
+for _var in ("FIREBASE_CREDENTIALS_B64", "FIREBASE_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS"):
+    os.environ.pop(_var, None)
+os.environ["LEAGUE_STORE"] = "json"
+os.environ["LEAGUE_DATA_FILE"] = os.path.join(tempfile.mkdtemp(prefix="wizard-test-"), "league.json")
+
+from app.main import app  # noqa: E402
+from app.services.connection_manager import manager  # noqa: E402
+from app.services.game_store import games  # noqa: E402
+from app.services.league_store import JsonBackend, store as league_store  # noqa: E402
+from app.services.trick_hold import clear_all as clear_trick_holds  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def fresh_league_store(tmp_path):
+    league_store.use_backend(JsonBackend(tmp_path / "league.json"))
+    yield league_store
 
 
 def _free_port() -> int:
