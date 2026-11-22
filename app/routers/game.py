@@ -1,22 +1,22 @@
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from typing import Dict, List, Optional
+from typing import Optional
 from pydantic import BaseModel
 import uuid
 
 from app.core.game import WizardGame
-from app.models.game import BiddingMode, GamePhase
+from app.models.game import BiddingMode, CardType
 from app.services.connection_manager import manager
+from app.services.game_store import games
+from app.services.player_view import player_state_dict
 
 router = APIRouter()
 
-# In-memory storage for active games
-games: Dict[str, WizardGame] = {}
 
 class JoinRequest(BaseModel):
     name: str
     game_id: Optional[str] = None
     bidding_mode: BiddingMode = BiddingMode.SEQUENTIAL
-    
+
 class RejoinRequest(BaseModel):
     game_id: str
     token: str
@@ -29,49 +29,51 @@ class ActionRequest(BaseModel):
 
 @router.post("/join")
 async def join_game(request: JoinRequest):
-    if request.game_id and request.game_id in games:
+    if request.game_id:
+        if request.game_id not in games:
+            raise HTTPException(status_code=404, detail="Game not found")
         game = games[request.game_id]
         player_idx = game.add_player(request.name)
         if player_idx == -1:
             raise HTTPException(status_code=400, detail="Game full or already started")
-            
+
         # Generate session token
         token = str(uuid.uuid4())
         game.state.player_tokens[token] = player_idx
-        
+
         await manager.broadcast_state(request.game_id, game)
         return {"game_id": request.game_id, "player_id": player_idx, "token": token}
-    else:
-        # Create new game
-        game_id = str(uuid.uuid4())[:8]
-        game = WizardGame(game_id, request.bidding_mode)
-        player_idx = game.add_player(request.name)
-        games[game_id] = game
-        
-        # Generate session token
-        token = str(uuid.uuid4())
-        game.state.player_tokens[token] = player_idx
-        
-        # No broadcast needed for the very first player since they just joined and no one else is there
-        return {"game_id": game_id, "player_id": player_idx, "token": token}
+
+    # Create new game
+    game_id = str(uuid.uuid4())[:8]
+    game = WizardGame(game_id, request.bidding_mode)
+    player_idx = game.add_player(request.name)
+    games[game_id] = game
+
+    # Generate session token
+    token = str(uuid.uuid4())
+    game.state.player_tokens[token] = player_idx
+
+    # No broadcast needed for the very first player since they just joined and no one else is there
+    return {"game_id": game_id, "player_id": player_idx, "token": token}
 
 @router.post("/rejoin")
 async def rejoin_game(request: RejoinRequest):
     if request.game_id not in games:
         raise HTTPException(status_code=404, detail="Game not found")
-    
+
     game = games[request.game_id]
-    
+
     if request.token not in game.state.player_tokens:
         raise HTTPException(status_code=403, detail="Invalid session token")
-        
+
     player_idx = game.state.player_tokens[request.token]
-    
+
     # We don't necessarily need to broadcast on rejoin, but we could to notify others they are back?
     # For now, just return the info needed to reconnect
     return {
-        "game_id": request.game_id, 
-        "player_id": player_idx, 
+        "game_id": request.game_id,
+        "player_id": player_idx,
         "token": request.token,
         "name": game.state.players[player_idx]
     }
@@ -92,7 +94,7 @@ async def player_ready(game_id: str, request: ActionRequest):
     if game_id not in games:
         raise HTTPException(status_code=404, detail="Game not found")
     game = games[game_id]
-    
+
     if game.player_ready(request.player_id):
         await manager.broadcast_state(game_id, game)
         return {"status": "success"}
@@ -104,10 +106,10 @@ async def game_action(game_id: str, request: ActionRequest):
     if game_id not in games:
         raise HTTPException(status_code=404, detail="Game not found")
     game = games[game_id]
-    
+
     success = False
     error_detail = "Invalid action"
-    
+
     if request.action == "bid":
         success, error_detail = game.submit_bid(request.player_id, request.value)
     elif request.action == "play":
@@ -129,7 +131,7 @@ async def game_action(game_id: str, request: ActionRequest):
         success = game.choose_trump(request.player_id, request.suit)
         if not success:
             error_detail = "Only the dealer can choose trump, and it must be a valid suit."
-    
+
     if success:
         await manager.broadcast_state(game_id, game)
         return {"status": "success"}
@@ -138,21 +140,24 @@ async def game_action(game_id: str, request: ActionRequest):
 
 @router.websocket("/ws/{game_id}/{player_id}")
 async def websocket_endpoint(websocket: WebSocket, game_id: str, player_id: int):
-    if game_id not in games:
+    game = games.get(game_id)
+    if game is None or player_id < 0 or player_id >= len(game.state.players):
+        await websocket.accept()
         await websocket.close(code=1008)
         return
-    
-    game = games[game_id]
+
     await manager.connect(game_id, player_id, websocket)
-    
+
     # Send initial state
-    await websocket.send_json(game.get_player_state(player_id).dict())
-    
+    await websocket.send_json(player_state_dict(game, player_id))
+
     try:
         while True:
             # We mostly use WebSocket for downstream updates.
             # Upstream can be HTTP or WS. For simplicity let's listen for ping or actions.
-            data = await websocket.receive_text()
+            await websocket.receive_text()
             # Handle incoming messages if needed
     except WebSocketDisconnect:
-        manager.disconnect(game_id, player_id)
+        pass
+    finally:
+        manager.disconnect(game_id, player_id, websocket)

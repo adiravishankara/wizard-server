@@ -6,8 +6,9 @@ live game state owned by app.routers.game, which this module never mutates.
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
+from app.services.game_store import games
 from app.models.league import (
     GameTeam,
     League,
@@ -74,9 +75,6 @@ def _get_league_or_404(league_id: str) -> League:
 
 
 def _live_game_or_404(game_id: str):
-    # Import here to avoid any import cycles at module load.
-    from app.routers.game import games
-
     game = games.get(game_id)
     if not game:
         raise HTTPException(

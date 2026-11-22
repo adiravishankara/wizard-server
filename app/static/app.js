@@ -43,18 +43,23 @@ function alertMsg(msg, ok = false) {
   alertMsg.t = setTimeout(() => el.classList.add("hidden"), 5000);
 }
 
+function sessionKey(s) {
+  return `${s.game_id}:${s.player_id}`;
+}
 function getSessions() {
   try { return JSON.parse(localStorage.getItem("wizard_sessions") || "[]"); }
   catch { return []; }
 }
 function saveSession(sess) {
-  const all = getSessions().filter((s) => s.game_id !== sess.game_id);
+  const all = getSessions().filter((s) => sessionKey(s) !== sessionKey(sess));
   all.unshift(sess);
   localStorage.setItem("wizard_sessions", JSON.stringify(all.slice(0, 12)));
+  try { sessionStorage.setItem("wizard_active", JSON.stringify(sess)); } catch { /* ignore */ }
 }
-function removeSession(game_id) {
+function removeSession(sess) {
+  const key = typeof sess === "string" ? sess : sessionKey(sess);
   localStorage.setItem("wizard_sessions",
-    JSON.stringify(getSessions().filter((s) => s.game_id !== game_id)));
+    JSON.stringify(getSessions().filter((s) => sessionKey(s) !== key)));
 }
 
 /* ---------- navigation ---------- */
@@ -98,17 +103,36 @@ function renderSessions() {
     <div class="session-row">
       <div><code>${esc(s.game_id)}</code> <span class="hint">${esc(s.name)}</span></div>
       <div class="row" style="margin:0">
-        <button data-resume="${esc(s.game_id)}">Resume</button>
-        <button data-forget="${esc(s.game_id)}" class="ghost">✕</button>
+        <button data-resume="${esc(sessionKey(s))}">Resume</button>
+        <button data-forget="${esc(sessionKey(s))}" class="ghost">✕</button>
       </div>
     </div>`).join("");
   list.querySelectorAll("[data-resume]").forEach((b) =>
     b.onclick = () => {
-      const s = getSessions().find((x) => x.game_id === b.dataset.resume);
-      if (s) enterGame(s);
+      const s = getSessions().find((x) => sessionKey(x) === b.dataset.resume);
+      if (s) resumeSession(s);
     });
   list.querySelectorAll("[data-forget]").forEach((b) =>
     b.onclick = () => { removeSession(b.dataset.forget); renderSessions(); });
+}
+
+async function resumeSession(sess) {
+  try {
+    const r = await gapi("/rejoin", "POST", { game_id: sess.game_id, token: sess.token });
+    enterGame({
+      game_id: r.game_id,
+      player_id: r.player_id,
+      token: sess.token,
+      name: r.name,
+    });
+  } catch (e) {
+    alertMsg(e.message);
+    const msg = String(e.message || "");
+    if (/not found|invalid session/i.test(msg)) {
+      removeSession(sess);
+      renderSessions();
+    }
+  }
 }
 
 /* ---------- game screen ---------- */
@@ -126,17 +150,30 @@ function enterGame(sess) {
 }
 
 $("btn-leave").onclick = () => {
-  if (S.ws) S.ws.close();
-  clearTimeout(S.wsRetry);
+  const leaving = S.ws;
   S.session = null; S.state = null;
+  clearTimeout(S.wsRetry);
+  S.wsRetry = null;
+  if (leaving) {
+    leaving.onclose = null;
+    leaving.close();
+  }
+  S.ws = null;
+  try { sessionStorage.removeItem("wizard_active"); } catch { /* ignore */ }
   $("game-screen").classList.add("hidden");
   $("games-home").classList.remove("hidden");
   renderSessions();
 };
 
 function connectWS() {
+  if (!S.session) return;
   const { game_id, player_id } = S.session;
-  if (S.ws) S.ws.close();
+  clearTimeout(S.wsRetry);
+  S.wsRetry = null;
+  if (S.ws) {
+    S.ws.onclose = null;
+    S.ws.close();
+  }
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}${API}/ws/${game_id}/${player_id}`);
   S.ws = ws;
@@ -147,12 +184,13 @@ function connectWS() {
     } catch { /* ignore */ }
   };
   ws.onclose = () => {
+    if (S.ws !== ws) return;
     clearTimeout(S.wsRetry);
     S.wsRetry = setTimeout(() => {
       if (S.session) { alertMsg("Connection lost — reconnecting…"); connectWS(); }
     }, 3000);
   };
-  ws.onerror = () => ws.close();
+  ws.onerror = () => { if (S.ws === ws) ws.close(); };
 }
 
 /* ----- cards ----- */
@@ -201,7 +239,8 @@ function renderGame() {
     $("bid-value").textContent = S.bidVal;
     $("bid-info").textContent =
       `Round ${st.current_round}: bid 0–${st.current_round} tricks. ` +
-      (st.bidding_mode === "canadian" ? "Canadian rule: dealer can't make totals equal the round." : "");
+      (st.bidding_mode === "canadian" ? "Canadian rule: last bidder can't make totals equal the round. " : "") +
+      (st.bidding_mode === "secret" ? "Blind: other bids stay hidden until this hand ends. " : "");
   }
 
   // trump
@@ -215,9 +254,12 @@ function renderGame() {
         cardHTML(c, { who: `<span class="who">${esc(st.players[pi])}</span>` })).join("")
     : `<span class="hint">No cards played yet.</span>`;
   const turnName = st.players[st.current_player] ?? "";
+  const openBid = st.bidding_mode === "simultaneous" || st.bidding_mode === "secret";
   $("turn-info").innerHTML =
     st.phase === "playing" ? `<strong>${esc(turnName)}</strong>'s turn to play` :
-    st.phase === "bidding" ? `<strong>${esc(turnName)}</strong> is bidding` :
+    st.phase === "bidding" ? (
+      openBid ? "Waiting for bids" : `<strong>${esc(turnName)}</strong> is bidding`
+    ) :
     st.phase === "waiting_trump" ? `<strong>${esc(turnName)}</strong> chooses trump` : "";
 
   // hand
@@ -379,13 +421,21 @@ async function loadGameTeams() {
 }
 
 /* ----- scores ----- */
+function bidShown(st, i) {
+  const bid = st.bids[String(i)] ?? st.bids[i];
+  const hideOthers = st.bidding_mode === "secret" &&
+    (st.phase === "bidding" || st.phase === "playing") &&
+    i !== st.player_id;
+  if (hideOthers || bid === null || bid === undefined) return "?";
+  return bid;
+}
+
 function renderScores(st) {
   const me = st.player_id;
   $("scores").innerHTML = st.players.map((p, i) => {
-    const bid = st.bids[String(i)] ?? st.bids[i];
     return `<div class="score-row ${i === me ? "me" : ""}">
       <div><strong>${esc(p)}</strong>
-        <span class="bid-chip">bid ${bid === null || bid === undefined ? "?" : bid}</span>
+        <span class="bid-chip">bid ${bidShown(st, i)}</span>
         <span class="bid-chip">won ${st.trick_wins[i] ?? 0}</span>
       </div>
       <div><strong>${st.scores[i]}</strong></div>
@@ -620,3 +670,7 @@ async function renderLeagueGames() {
 
 /* ---------- init ---------- */
 renderSessions();
+try {
+  const active = JSON.parse(sessionStorage.getItem("wizard_active") || "null");
+  if (active && active.token) resumeSession(active);
+} catch { /* ignore */ }

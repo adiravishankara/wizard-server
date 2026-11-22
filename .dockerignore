@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+**/__pycache__
+data
+wizard_session.json
+tests
+.pytest_cache
+*.pyc

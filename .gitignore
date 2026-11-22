@@ -11,3 +11,11 @@ wheels/
 
 # Runtime league data (created by the server at runtime)
 data/
+
+# Local client session tokens
+wizard_session.json
+wizard_session_*.json
+
+# Tests / tooling
+.pytest_cache/
+

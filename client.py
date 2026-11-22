@@ -11,10 +11,10 @@ import sys
 import os
 
 console = Console()
-SESSION_FILE = "wizard_session.json"
+SESSION_FILE = os.environ.get("WIZARD_SESSION_FILE", "wizard_session.json")
 
-BASE_URL = "http://localhost:8000/api/game"
-WS_URL = "ws://localhost:8000/api/game/ws"
+BASE_URL = os.environ.get("WIZARD_API_URL", "http://localhost:8000/api/game")
+WS_URL = os.environ.get("WIZARD_WS_URL", "ws://localhost:8000/api/game/ws")
 
 class WizardClient:
     def __init__(self):
@@ -25,52 +25,103 @@ class WizardClient:
         self.is_prompting = False
 
     
-    def save_session(self, token):
+    def _read_session_file(self):
+        if not os.path.exists(SESSION_FILE):
+            return []
+        try:
+            with open(SESSION_FILE, "r") as f:
+                data = json.load(f)
+        except Exception:
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "sessions" in data:
+            return data["sessions"]
+        if isinstance(data, dict) and "game_id" in data:
+            return [data]
+        return []
+
+    def _write_session_file(self, sessions):
         with open(SESSION_FILE, "w") as f:
-            json.dump({
-                "game_id": self.game_id,
-                "player_id": self.player_id,
-                "token": token,
-                "name": self.name
-            }, f)
-            
+            json.dump(sessions, f)
+
+    def save_session(self, token):
+        sessions = [
+            s for s in self._read_session_file()
+            if not (s.get("game_id") == self.game_id and s.get("player_id") == self.player_id)
+        ]
+        sessions.append({
+            "game_id": self.game_id,
+            "player_id": self.player_id,
+            "token": token,
+            "name": self.name
+        })
+        self._write_session_file(sessions)
+
     def load_session(self):
-        if os.path.exists(SESSION_FILE):
-            try:
-                with open(SESSION_FILE, "r") as f:
-                    return json.load(f)
-            except:
-                return None
-        return None
-        
-    def clear_session(self):
-        if os.path.exists(SESSION_FILE):
+        sessions = self._read_session_file()
+        return sessions[-1] if sessions else None
+
+    def pick_session(self):
+        sessions = self._read_session_file()
+        if not sessions:
+            return None
+        if len(sessions) == 1:
+            s = sessions[0]
+            ans = Prompt.ask(
+                f"Found existing session for game [bold cyan]{s['game_id']}[/bold cyan] as [bold cyan]{s.get('name', '?')}[/bold cyan]. Rejoin?",
+                choices=["y", "n"],
+                default="y",
+            )
+            return s if ans == "y" else None
+        rprint("[cyan]Saved sessions:[/cyan]")
+        for i, s in enumerate(sessions):
+            rprint(f"  [{i}] game {s.get('game_id')} as {s.get('name', '?')} (player {s.get('player_id')})")
+        choices = [str(i) for i in range(len(sessions))] + ["n"]
+        ans = Prompt.ask("Rejoin which session? (n to start fresh)", choices=choices, default="0")
+        if ans == "n":
+            return None
+        return sessions[int(ans)]
+
+    def clear_session(self, game_id=None, player_id=None):
+        sessions = self._read_session_file()
+        if game_id is None:
+            if os.path.exists(SESSION_FILE):
+                os.remove(SESSION_FILE)
+            return
+        kept = [
+            s for s in sessions
+            if not (s.get("game_id") == game_id and (player_id is None or s.get("player_id") == player_id))
+        ]
+        if kept:
+            self._write_session_file(kept)
+        elif os.path.exists(SESSION_FILE):
             os.remove(SESSION_FILE)
 
     def join_lobby(self):
-        # Check for previous session
-        session = self.load_session()
+        # Check for previous session(s). Multiple clients sharing a working
+        # directory used to overwrite a single wizard_session.json, so only
+        # the last player could rejoin.
+        session = self.pick_session()
         if session:
-            ans = Prompt.ask(f"Found existing session for game [bold cyan]{session['game_id']}[/bold cyan] as [bold cyan]{session['name']}[/bold cyan]. Rejoin?", choices=["y", "n"], default="y")
-            if ans == "y":
-                try:
-                    res = requests.post(f"{BASE_URL}/rejoin", json={
-                        "game_id": session["game_id"],
-                        "token": session["token"]
-                    })
-                    if res.status_code == 200:
-                        data = res.json()
-                        self.game_id = data["game_id"]
-                        self.player_id = data["player_id"]
-                        self.name = data["name"]
-                        rprint(f"[green]Successfully rejoined game {self.game_id}![/green]")
-                        return # Skip the rest of join_lobby
-                    else:
-                        rprint("[red]Failed to rejoin (session might be expired). Starting fresh.[/red]")
-                        self.clear_session()
-                except Exception as e:
-                    rprint(f"[red]Error rejoining: {e}[/red]")
-                    self.clear_session()
+            try:
+                res = requests.post(f"{BASE_URL}/rejoin", json={
+                    "game_id": session["game_id"],
+                    "token": session["token"]
+                })
+                if res.status_code == 200:
+                    data = res.json()
+                    self.game_id = data["game_id"]
+                    self.player_id = data["player_id"]
+                    self.name = data["name"]
+                    rprint(f"[green]Successfully rejoined game {self.game_id}![/green]")
+                    return # Skip the rest of join_lobby
+                else:
+                    rprint("[red]Failed to rejoin (session might be expired). Starting fresh.[/red]")
+                    self.clear_session(session.get("game_id"), session.get("player_id"))
+            except Exception as e:
+                rprint(f"[red]Error rejoining: {e}[/red]")
+                self.clear_session(session.get("game_id"), session.get("player_id"))
         
         self.name = Prompt.ask("Enter your name")
         gid = Prompt.ask("Enter Game ID to join (leave blank to create new)", default="")
