@@ -5,6 +5,6 @@ including rejoin tokens. League data lives separately in league_store.
 """
 from typing import Dict
 
-from app.core.game import WizardGame
+from app.services.tracked_game import TrackedWizardGame
 
-games: Dict[str, WizardGame] = {}
+games: Dict[str, TrackedWizardGame] = {}

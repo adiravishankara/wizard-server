@@ -3,11 +3,11 @@ from typing import Optional
 from pydantic import BaseModel
 import uuid
 
-from app.core.game import WizardGame
 from app.models.game import BiddingMode, CardType
 from app.services.connection_manager import manager
 from app.services.game_store import games
 from app.services.player_view import player_state_dict
+from app.services.tracked_game import TrackedWizardGame
 from app.services.trick_hold import clear_hold, set_hold
 
 router = APIRouter()
@@ -47,7 +47,7 @@ async def join_game(request: JoinRequest):
 
     # Create new game
     game_id = str(uuid.uuid4())[:8]
-    game = WizardGame(game_id, request.bidding_mode)
+    game = TrackedWizardGame(game_id, request.bidding_mode)
     player_idx = game.add_player(request.name)
     games[game_id] = game
 
@@ -147,7 +147,11 @@ async def game_action(game_id: str, request: ActionRequest):
     elif request.action == "choose_trump":
         success = game.choose_trump(request.player_id, request.suit)
         if not success:
-            chooser = game.state.players[game.state.dealer_idx] if game.state.players else "the dealer"
+            players = game.state.players
+            chooser = (
+                players[(game.state.dealer_idx - 1) % len(players)]
+                if players else "the player right of the dealer"
+            )
             error_detail = f"Only {chooser} can choose trump, and it must be a valid suit."
 
     if success:
