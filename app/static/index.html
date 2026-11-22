@@ -18,7 +18,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">🃏 Wizard</div>
+  <div class="brand">🃏 <span class="brand-text">Wizard</span></div>
   <div class="topbar-right">
     <nav>
       <button id="nav-games" class="nav-btn active">Games</button>
@@ -63,12 +63,14 @@
 
     <div id="game-screen" class="hidden">
       <div class="game-top">
-        <button id="btn-leave" class="ghost">←</button>
-        <div class="game-meta">
+        <button id="btn-leave" class="ghost icon-btn" type="button" title="Leave table">←</button>
+        <button id="g-room" class="room-btn" type="button" title="Copy room code">
+          <span class="room-label">Room</span>
           <span class="game-code" id="g-code"></span>
-          <span id="g-round" class="pill"></span>
-          <span id="g-trump" class="trump-chip"></span>
-        </div>
+        </button>
+        <span id="g-round" class="pill"></span>
+        <span id="g-trump" class="trump-chip"></span>
+        <button id="btn-scores" class="score-btn" type="button">Score</button>
       </div>
       <div id="game-alert" class="alert hidden"></div>
       <p id="status-line" class="status-line"></p>
@@ -91,43 +93,45 @@
         <button id="btn-save-teams" class="primary">Save teams</button>
       </div>
 
-      <div id="table-panel" class="play-stage">
-        <div id="opponents" class="badge-row"></div>
-        <div id="trick-area" class="trick"></div>
-        <div id="you-badge"></div>
+      <div id="table-panel" class="table-wrap">
+        <div id="table" class="table">
+          <div class="felt"></div>
+          <div id="trump-spot" class="trump-spot"></div>
+          <div id="table-center" class="table-center"></div>
+          <div id="trick-area" class="trick-zone"></div>
+          <div id="trick-ghosts" class="trick-zone ghosts" aria-hidden="true"></div>
+          <div id="seats"></div>
+        </div>
       </div>
 
-      <div id="bid-panel" class="bid-sheet hidden">
-        <p id="bid-info"></p>
+      <div id="bid-panel" class="action-bar hidden">
+        <span id="bid-info" class="action-label"></span>
         <div class="bid-controls">
-          <button id="bid-minus" class="bid-step" type="button">−</button>
+          <button id="bid-minus" class="bid-step" type="button" aria-label="Lower bid">−</button>
           <span id="bid-value">0</span>
-          <button id="bid-plus" class="bid-step" type="button">+</button>
+          <button id="bid-plus" class="bid-step" type="button" aria-label="Raise bid">+</button>
         </div>
         <button id="btn-bid" class="primary bid-go" type="button">Bid</button>
       </div>
 
-      <div id="trump-panel" class="trump-sheet hidden">
-        <div id="trump-flip" class="flip-slot"></div>
-        <p id="trump-caption" class="trump-caption"></p>
-        <div id="trump-actions" class="suit-picker hidden">
-          <button data-suit="H" class="suit red" type="button" title="Hearts">♥</button>
-          <button data-suit="D" class="suit red" type="button" title="Diamonds">♦</button>
-          <button data-suit="C" class="suit" type="button" title="Clubs">♣</button>
-          <button data-suit="S" class="suit" type="button" title="Spades">♠</button>
+      <div id="trump-panel" class="action-bar trump-bar hidden">
+        <span class="action-label">Choose trump</span>
+        <div id="trump-actions" class="suit-picker">
+          <button data-suit="H" class="suit red" type="button"><span class="suit-sym">♥</span><span class="suit-name">Hearts</span></button>
+          <button data-suit="D" class="suit red" type="button"><span class="suit-sym">♦</span><span class="suit-name">Diamonds</span></button>
+          <button data-suit="C" class="suit" type="button"><span class="suit-sym">♣</span><span class="suit-name">Clubs</span></button>
+          <button data-suit="S" class="suit" type="button"><span class="suit-sym">♠</span><span class="suit-name">Spades</span></button>
         </div>
-        <p id="trump-wait" class="hint hidden"></p>
+      </div>
+
+      <div id="roundover-panel" class="action-bar hidden">
+        <span id="ready-info" class="action-label"></span>
+        <button id="btn-ready" class="primary bid-go" type="button">Ready</button>
       </div>
 
       <div id="hand-panel" class="hand-dock">
         <div id="hand" class="hand"></div>
         <button id="btn-play" class="primary play-confirm hidden" type="button">Play card</button>
-      </div>
-
-      <div id="roundover-panel" class="card hidden">
-        <h2>Round over</h2>
-        <div id="round-scores"></div>
-        <button id="btn-ready" class="primary bid-go" type="button">Ready</button>
       </div>
 
       <div id="gameover-panel" class="card hidden">
@@ -141,13 +145,16 @@
         </div>
       </div>
 
-      <aside class="game-side">
-        <div class="card">
-          <h2>Scores</h2>
-          <div id="scores"></div>
+      <div id="drawer-scrim" class="scrim hidden"></div>
+      <aside id="score-drawer" class="drawer hidden" aria-label="Scoreboard">
+        <div class="drawer-head">
+          <h2>Scoreboard</h2>
+          <button id="btn-scores-close" class="ghost icon-btn" type="button" aria-label="Close">✕</button>
         </div>
-        <div class="card hidden" id="teams-card">
-          <h2>Team scores</h2>
+        <div id="scores"></div>
+        <div id="score-history"></div>
+        <div class="hidden" id="teams-card">
+          <h3>Team scores</h3>
           <div id="team-scores"></div>
         </div>
       </aside>
