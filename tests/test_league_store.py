@@ -4,11 +4,17 @@ import json
 
 import pytest
 
-from app.models.league import LeagueGameRecord, RecordPlayer, RecordRound, Team
+from app.models.league import LeagueGameRecord, RecordPlayer, RecordRound, RoundLine, Team
 from app.services import league_firestore
 from app.services.league_firestore import FirestoreBackend, load_service_account
 from app.services.league_store import JsonBackend, LeagueStore, StoreError, backend_from_env
 from fake_firestore import FakeFirestoreClient
+
+
+def _lines(rows):
+    names = ["Ada", "Bea", "Cal"]
+    return [RoundLine(seat=i, name=names[i], bid=b, tricks=t, points=p, total=tot)
+            for i, (b, t, p, tot) in enumerate(rows)]
 
 
 def _populate(store: LeagueStore):
@@ -32,8 +38,11 @@ def _populate(store: LeagueStore):
                          bids_made=1, rounds_bid=2),
         ],
         rounds=[
-            RecordRound(round=1, bids={"0": 1, "1": 0, "2": 0}, tricks=[1, 0, 0], deltas=[30, 20, 20]),
-            RecordRound(round=2, bids={"0": 1, "1": 1, "2": 1}, tricks=[1, 0, 1], deltas=[30, -30, 10]),
+            RecordRound(round=1, cards_dealt=1, dealer_seat=2, dealer="Cal", trump="H", trump_source="flip",
+                        players=_lines([(1, 1, 30, 30), (0, 0, 20, 20), (0, 0, 20, 20)])),
+            RecordRound(round=2, cards_dealt=2, dealer_seat=0, dealer="Ada", trump="S", trump_source="wizard",
+                        trump_chosen_by="Cal",
+                        players=_lines([(1, 1, 30, 60), (1, 0, -30, -10), (1, 1, 10, 30)])),
         ],
         team_scores={team.id: 50},
         team_names={team.id: "Pointy Hats"},
@@ -57,7 +66,14 @@ def _assert_round_trip(reloaded: LeagueStore, league, rec):
     assert [(p.name, p.score, p.bids_made) for p in saved.players] == [
         ("Ada", 60, 2), ("Bea", -10, 1), ("Cal", 30, 1),
     ]
-    assert saved.rounds[1].tricks == [1, 0, 1]
+    r2 = saved.rounds[1]
+    assert (r2.round, r2.cards_dealt, r2.dealer, r2.trump, r2.trump_source, r2.trump_chosen_by) == \
+        (2, 2, "Ada", "S", "wizard", "Cal")
+    assert [(ln.name, ln.bid, ln.tricks, ln.points, ln.total) for ln in r2.players] == [
+        ("Ada", 1, 1, 30, 60), ("Bea", 1, 0, -30, -10), ("Cal", 1, 1, 10, 30),
+    ]
+    assert [(p.name, p.place) for p in saved.players] == [("Ada", 1), ("Bea", 3), ("Cal", 2)]
+    assert saved.final_only is False
     assert saved.winner_names == ["Ada"]
 
 
@@ -68,6 +84,38 @@ def test_json_backend_survives_restart(tmp_path):
     raw = json.loads(path.read_text())
     assert raw["version"] == 2
     assert "winner_names" not in raw["leagues"][league.id]["games"][0]
+
+
+def test_firestore_game_document_shape():
+    client = FakeFirestoreClient()
+    store = LeagueStore(FirestoreBackend(client))
+    league, rec = _populate(store)
+    doc = client.docs[("leagues", league.id, "games", rec.id)]
+    assert {"id", "game_id", "source", "played_at", "rounds_played", "bidding_mode", "players",
+            "rounds", "final_only", "team_scores", "winner_team_ids"} <= set(doc)
+    assert not {"winner_names", "player_tie", "team_tie"} & set(doc)
+    assert set(doc["players"][0]) == {"name", "league_player_id", "seat", "score", "place", "team_id",
+                                      "bids_made", "rounds_bid"}
+    assert set(doc["rounds"][0]) == {"round", "cards_dealt", "dealer_seat", "dealer", "trump",
+                                     "trump_source", "trump_chosen_by", "players"}
+    assert doc["rounds"][1]["players"][1] == {"seat": 1, "name": "Bea", "bid": 1, "tricks": 0,
+                                              "points": -30, "total": -10}
+    assert doc["players"][0]["place"] == 1 and doc["final_only"] is False
+
+
+def test_legacy_round_format_is_upgraded_with_running_totals():
+    rec = LeagueGameRecord.model_validate({
+        "players": [{"name": "Ada", "seat": 0, "score": 10}, {"name": "Bea", "seat": 1, "score": 40},
+                    {"name": "Cal", "seat": 2, "score": 40}],
+        "rounds": [
+            {"round": 1, "bids": {"0": 0, "1": 1, "2": 0}, "tricks": [0, 1, 0], "deltas": [20, 30, 20]},
+            {"round": 2, "bids": {"0": 1, "1": 0, "2": 0}, "tricks": [0, 1, 0], "deltas": [-10, 10, 20]},
+        ],
+    })
+    assert [(ln.name, ln.points, ln.total) for ln in rec.rounds[1].players] == [
+        ("Ada", -10, 10), ("Bea", 10, 40), ("Cal", 20, 40)]
+    assert rec.rounds[0].players[1].bid == 1 and rec.rounds[0].cards_dealt == 1
+    assert [p.place for p in rec.players] == [3, 1, 1]
 
 
 def test_json_backend_deletes_records_and_leagues(tmp_path):

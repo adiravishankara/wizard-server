@@ -6,7 +6,7 @@ module never mutates. Handlers are sync so FastAPI runs them in its thread
 pool and Firestore round-trips never block the WebSocket event loop.
 """
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -20,6 +20,8 @@ from app.models.league import (
     LeaguePlayer,
     PlayerStatRow,
     RecordPlayer,
+    RecordRound,
+    RoundLine,
     StandingRow,
     Team,
     TeamScore,
@@ -88,8 +90,21 @@ class RecordGameRequest(BaseModel):
 class ResultPlayerIn(BaseModel):
     league_player_id: Optional[str] = None
     name: Optional[str] = None  # used when no id: matched by name, else added to the league
-    score: int
+    score: Optional[int] = None  # required unless per-round scores are given
     bids_made: Optional[int] = None
+
+
+class RoundLineIn(BaseModel):
+    points: int
+    bid: Optional[int] = None
+    tricks: Optional[int] = None
+
+
+class RoundIn(BaseModel):
+    cards_dealt: Optional[int] = None  # defaults to the hand number
+    dealer: Optional[int] = None       # index into ResultIn.players
+    trump: Optional[str] = None        # "H" | "D" | "C" | "S"; empty = no trump
+    lines: List[RoundLineIn]           # one per player, in ResultIn.players order
 
 
 class ResultIn(BaseModel):
@@ -97,6 +112,7 @@ class ResultIn(BaseModel):
     bidding_mode: Optional[str] = None
     rounds_played: int = 0
     players: List[ResultPlayerIn]
+    rounds: Optional[List[RoundIn]] = None  # per-hand scores; None/empty = final only
     notes: str = ""
 
 
@@ -190,13 +206,45 @@ def _parse_played_at(raw: Optional[str]) -> str:
     return dt.isoformat()
 
 
-def _result_players(league: League, req: ResultIn) -> List[RecordPlayer]:
+def _bad(detail: str):
+    raise HTTPException(status_code=400, detail=detail)
+
+
+def _check_rounds(req: ResultIn, labels: List[str]) -> List[List[int]]:
+    """Validate per-hand input and return running totals per hand."""
+    n = len(labels)
+    if len(req.rounds) > 20:
+        _bad("A Wizard game has at most 20 hands")
+    totals = [0] * n
+    running: List[List[int]] = []
+    for i, rnd in enumerate(req.rounds, start=1):
+        cards = rnd.cards_dealt if rnd.cards_dealt is not None else i
+        if not 1 <= cards <= 20:
+            _bad(f"Hand {i}: cards dealt must be between 1 and 20")
+        if len(rnd.lines) != n:
+            _bad(f"Hand {i}: enter points for all {n} players")
+        if rnd.dealer is not None and not 0 <= rnd.dealer < n:
+            _bad(f"Hand {i}: unknown dealer")
+        if rnd.trump and rnd.trump not in ("H", "D", "C", "S"):
+            _bad(f"Hand {i}: trump must be H, D, C or S")
+        for label, ln in zip(labels, rnd.lines):
+            for what, val in (("bid", ln.bid), ("tricks", ln.tricks)):
+                if val is not None and not 0 <= val <= cards:
+                    _bad(f"Hand {i}: {label}'s {what} must be between 0 and {cards}")
+        totals = [t + ln.points for t, ln in zip(totals, rnd.lines)]
+        running.append(list(totals))
+    return running
+
+
+def _result_players(league: League, req: ResultIn) -> Tuple[List[RecordPlayer], List[RecordRound]]:
     if not 3 <= len(req.players) <= 6:
-        raise HTTPException(status_code=400, detail="A Wizard game has 3 to 6 players")
+        _bad("A Wizard game has 3 to 6 players")
     if req.bidding_mode and req.bidding_mode not in _MODES:
-        raise HTTPException(status_code=400, detail=f"Unknown bidding mode: {req.bidding_mode}")
-    if not 0 <= req.rounds_played <= 20:
-        raise HTTPException(status_code=400, detail="Rounds must be between 0 and 20")
+        _bad(f"Unknown bidding mode: {req.bidding_mode}")
+    per_round = bool(req.rounds)
+    rounds_played = len(req.rounds) if per_round else req.rounds_played
+    if not 0 <= rounds_played <= 20:
+        _bad("Rounds must be between 0 and 20")
     # Validate everything before adding any new names to the league.
     resolved = []
     seen = set()
@@ -204,41 +252,70 @@ def _result_players(league: League, req: ResultIn) -> List[RecordPlayer]:
         if entry.league_player_id:
             player = league.players.get(entry.league_player_id)
             if not player:
-                raise HTTPException(status_code=400, detail="Unknown league player")
+                _bad("Unknown league player")
             key, label = player.id, player.name
         else:
             label = _clean_name(entry.name or "", "Player")
             player = store.find_player_by_name(league, label)
             key = player.id if player else label.casefold()
         if key in seen:
-            raise HTTPException(status_code=400, detail=f"{label} is listed twice")
+            _bad(f"{label} is listed twice")
         seen.add(key)
+        if entry.score is None and not per_round:
+            _bad(f"Enter a final score for {label}")
         if entry.bids_made is not None:
-            if not req.rounds_played:
-                raise HTTPException(status_code=400, detail="Enter the number of rounds to record bids made")
-            if not 0 <= entry.bids_made <= req.rounds_played:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{label}: bids made must be between 0 and {req.rounds_played}",
-                )
+            if not rounds_played:
+                _bad("Enter the number of rounds to record bids made")
+            if not 0 <= entry.bids_made <= rounds_played:
+                _bad(f"{label}: bids made must be between 0 and {rounds_played}")
         resolved.append((entry, player, label))
+
+    labels = [label for _, _, label in resolved]
+    running = _check_rounds(req, labels) if per_round else []
+    if per_round:
+        for idx, (entry, _, label) in enumerate(resolved):
+            total = running[-1][idx]
+            if entry.score is not None and entry.score != total:
+                _bad(f"{label}'s final score {entry.score} doesn't match the hand-by-hand total {total}")
 
     membership = team_of_player(league)
     out: List[RecordPlayer] = []
-    for entry, player, label in resolved:
+    for idx, (entry, player, label) in enumerate(resolved):
         if player is None:
             player = store.add_player(league, label)
-        bids_made = entry.bids_made
         team = membership.get(player.id)
+        bids_made, rounds_bid = entry.bids_made, (rounds_played if entry.bids_made is not None else None)
+        if per_round:
+            pairs = [(r.lines[idx].bid, r.lines[idx].tricks) for r in req.rounds]
+            known = [(b, t) for b, t in pairs if b is not None and t is not None]
+            if known:
+                bids_made, rounds_bid = sum(1 for b, t in known if b == t), len(known)
         out.append(RecordPlayer(
             name=player.name,
             league_player_id=player.id,
-            score=entry.score,
+            seat=idx if per_round else None,
+            score=running[-1][idx] if per_round else entry.score,
             team_id=team.id if team else None,
             bids_made=bids_made,
-            rounds_bid=req.rounds_played if bids_made is not None else None,
+            rounds_bid=rounds_bid,
         ))
-    return out
+
+    rounds: List[RecordRound] = []
+    for i, rnd in enumerate(req.rounds or [], start=1):
+        rounds.append(RecordRound(
+            round=i,
+            cards_dealt=rnd.cards_dealt if rnd.cards_dealt is not None else i,
+            dealer_seat=rnd.dealer,
+            dealer=out[rnd.dealer].name if rnd.dealer is not None else None,
+            trump=rnd.trump or None,
+            trump_source=None,
+            players=[
+                RoundLine(seat=idx, name=out[idx].name, bid=ln.bid, tricks=ln.tricks,
+                          points=ln.points, total=running[i - 1][idx])
+                for idx, ln in enumerate(rnd.lines)
+            ],
+        ))
+    return out, rounds
 
 
 # ---------- leagues ----------
@@ -546,13 +623,14 @@ def get_recorded_game(league_id: str, record_id: str):
 @router.post("/leagues/{league_id}/games", response_model=LeagueGameRecord)
 def add_manual_result(league_id: str, req: ResultIn):
     league = _get_league_or_404(league_id)
-    players = _result_players(league, req)
+    players, rounds = _result_players(league, req)
     record = LeagueGameRecord(
         source="manual",
         played_at=_parse_played_at(req.played_at),
-        rounds_played=req.rounds_played,
+        rounds_played=len(rounds) or req.rounds_played,
         bidding_mode=req.bidding_mode or None,
         players=players,
+        rounds=rounds,
         notes=req.notes.strip()[:500],
     )
     return store.add_record(league_id, finalize_record(record, league))
@@ -564,23 +642,29 @@ def edit_result(league_id: str, record_id: str, req: ResultIn):
     old = store.get_record(league_id, record_id)
     if not old:
         raise HTTPException(status_code=404, detail="Result not found")
-    players = _result_players(league, req)
+    players, rounds = _result_players(league, req)
     old_by_pid = {p.league_player_id: p for p in old.players if p.league_player_id}
     for p in players:
         prev = old_by_pid.get(p.league_player_id)
         if prev is not None:
-            p.seat = prev.seat
+            if not rounds:
+                p.seat = prev.seat
             if p.team_id is None:
                 p.team_id = prev.team_id
-    same_lineup = {p.league_player_id for p in players} == set(old_by_pid) and \
-        len(players) == len(old.players)
+    if not rounds and req.rounds is None:
+        # No per-hand data sent: keep the old hands only if they still add up.
+        same_lineup = {p.league_player_id for p in players} == set(old_by_pid) and \
+            len(players) == len(old.players)
+        finals = {ln.seat: ln.total for ln in old.rounds[-1].players} if old.rounds else {}
+        if same_lineup and all(finals.get(p.seat) == p.score for p in players):
+            rounds = old.rounds
     record = old.model_copy(update={
         "played_at": _parse_played_at(req.played_at) if req.played_at else old.played_at,
         "edited_at": datetime.now(timezone.utc).isoformat(),
-        "rounds_played": req.rounds_played,
+        "rounds_played": len(rounds) or req.rounds_played,
         "bidding_mode": req.bidding_mode or None,
         "players": players,
-        "rounds": old.rounds if same_lineup else [],
+        "rounds": rounds,
         "notes": req.notes.strip()[:500],
         "team_scores": {}, "winner_team_ids": [], "winner_team_id": None,
     })

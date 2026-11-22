@@ -169,3 +169,62 @@ def test_league_ui_is_served_without_browser_dialogs(client):
     js = res.text
     assert "confirm(" not in js.replace("confirmDialog(", "")
     assert "alert(" not in js.replace("Alert(", "").replace("alertMsg(", "")
+
+
+def _hand(dealer, trump, *lines):
+    return {"dealer": dealer, "trump": trump,
+            "lines": [{"points": p, "bid": b, "tricks": t} for p, b, t in lines]}
+
+
+def test_manual_result_with_per_hand_scores(client):
+    lid, ids, _ = _league(client, players=("Ada", "Bea", "Cal"))
+    body = {
+        "played_at": "2026-11-20", "bidding_mode": "sequential",
+        "players": [{"league_player_id": ids["Ada"]}, {"league_player_id": ids["Bea"], "score": 0},
+                    {"name": "Cal"}],
+        "rounds": [
+            _hand(0, "H", (30, 1, 1), (20, 0, 0), (-10, 1, 0)),
+            _hand(1, "", (-10, 2, 1), (40, 1, 1), (20, 0, 0)),
+            _hand(2, "S", (-20, 0, 2), (-60, 3, 0), (50, 1, 1)),
+        ],
+    }
+    rec = client.post(f"{API}/leagues/{lid}/games", json=body).json()
+    assert rec["final_only"] is False and rec["rounds_played"] == 3
+    assert [(p["name"], p["score"], p["place"], p["bids_made"], p["rounds_bid"]) for p in rec["players"]] == [
+        ("Ada", 0, 2, 1, 3), ("Bea", 0, 2, 2, 3), ("Cal", 60, 1, 2, 3)]
+    r2 = rec["rounds"][1]
+    assert (r2["round"], r2["cards_dealt"], r2["dealer"], r2["trump"]) == (2, 2, "Bea", None)
+    assert [(ln["name"], ln["points"], ln["total"]) for ln in r2["players"]] == [
+        ("Ada", -10, 20), ("Bea", 40, 60), ("Cal", 20, 10)]
+
+    stored = client.get(f"{API}/leagues/{lid}/games/{rec['id']}").json()
+    assert stored["rounds"] == rec["rounds"]
+
+    # Editing other fields without sending hands keeps them while the totals still match.
+    edit = {"played_at": "2026-11-21", "players": [{"league_player_id": p["league_player_id"], "score": p["score"]}
+                                                    for p in rec["players"]]}
+    kept = client.put(f"{API}/leagues/{lid}/games/{rec['id']}", json=edit).json()
+    assert kept["final_only"] is False and len(kept["rounds"]) == 3
+    # Changing a final score without hands turns it into a final-only result.
+    edit["players"][0]["score"] = 100
+    final_only = client.put(f"{API}/leagues/{lid}/games/{rec['id']}", json=edit).json()
+    assert final_only["final_only"] is True and final_only["rounds"] == []
+
+
+def test_per_hand_input_is_validated(client):
+    lid, ids, _ = _league(client, players=("Ada", "Bea", "Cal"))
+    players = [{"league_player_id": ids[n]} for n in ("Ada", "Bea", "Cal")]
+    bad_total = {"players": [dict(players[0], score=99), players[1], players[2]],
+                 "rounds": [_hand(0, "H", (30, 1, 1), (20, 0, 0), (-10, 1, 0))]}
+    res = client.post(f"{API}/leagues/{lid}/games", json=bad_total)
+    assert res.status_code == 400 and "doesn't match" in res.json()["detail"]
+    short = {"players": players, "rounds": [{"lines": [{"points": 20}, {"points": 20}]}]}
+    assert client.post(f"{API}/leagues/{lid}/games", json=short).status_code == 400
+    too_many_tricks = {"players": players, "rounds": [_hand(0, "H", (30, 1, 2), (20, 0, 0), (-10, 1, 0))]}
+    assert client.post(f"{API}/leagues/{lid}/games", json=too_many_tricks).status_code == 400
+    no_score = {"players": players}
+    assert client.post(f"{API}/leagues/{lid}/games", json=no_score).status_code == 400
+    final = client.post(f"{API}/leagues/{lid}/games", json={
+        "players": [dict(p, score=s) for p, s in zip(players, (50, 10, -20))]}).json()
+    assert final["final_only"] is True and final["rounds"] == []
+    assert len(client.get(f"{API}/leagues/{lid}/games").json()) == 1

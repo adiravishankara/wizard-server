@@ -50,7 +50,11 @@ def test_view_exposes_counts_history_and_ready():
     assert game.state.phase == GamePhase.ROUND_OVER
     assert len(game.history) == 1
     entry = game.history[0]
-    assert entry["round"] == 1
+    assert entry["round"] == 1 and entry["cards_dealt"] == 1
+    assert entry["dealer"] == (game.state.dealer_idx - 1) % 3
+    assert entry["trump_source"] in {"flip", "wizard", "jester"}
+    if entry["trump_source"] == "wizard":
+        assert entry["trump"] == "S" and entry["trump_chosen_by"] == (entry["dealer"] - 1) % 3
     assert entry["scores"] == game.state.scores
     assert sum(entry["tricks"]) == 1
     game.player_ready(1)

@@ -124,3 +124,23 @@ def test_record_from_real_game_snapshots_every_player():
     for seat, p in enumerate(rec.players):
         made = sum(1 for h in game.history if h["bids"][str(seat)] == h["tricks"][seat])
         assert (p.bids_made, p.rounds_bid) == (made, 15)
+
+    first_dealer = rec.rounds[0].dealer_seat
+    for i, rnd in enumerate(rec.rounds):
+        assert rnd.round == rnd.cards_dealt == i + 1
+        assert rnd.dealer_seat == (first_dealer + i) % 4
+        assert rnd.dealer == rec.players[rnd.dealer_seat].name
+        assert rnd.trump_source in {"flip", "wizard", "jester", "none"}
+        assert (rnd.trump is None) == (rnd.trump_source in {"jester", "none"})
+        assert (rnd.trump_chosen_by is not None) == (rnd.trump_source == "wizard")
+        assert sum(ln.tricks for ln in rnd.players) == rnd.cards_dealt
+        for ln in rnd.players:
+            prev = rec.rounds[i - 1].players[ln.seat].total if i else 0
+            assert ln.total == prev + ln.points
+            assert 0 <= ln.bid <= rnd.cards_dealt
+            bonus = 20 + 10 * ln.tricks if ln.bid == ln.tricks else -10 * abs(ln.bid - ln.tricks)
+            assert ln.points == bonus
+    # 4 players: the last hand deals all 60 cards, so nothing is flipped.
+    assert rec.rounds[-1].trump_source == "none" and rec.rounds[-1].trump is None
+    assert [ln.total for ln in rec.rounds[-1].players] == [p.score for p in rec.players]
+    assert sorted(p.place for p in rec.players)[0] == 1

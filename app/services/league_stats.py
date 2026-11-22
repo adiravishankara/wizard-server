@@ -12,6 +12,7 @@ from app.models.league import (
     PlayerStatRow,
     RecordPlayer,
     RecordRound,
+    RoundLine,
     StandingRow,
     Team,
 )
@@ -69,7 +70,8 @@ def _team_winners(rec: LeagueGameRecord) -> List[str]:
 
 
 def finalize_record(rec: LeagueGameRecord, league: League) -> LeagueGameRecord:
-    """Recompute team totals and winners from the per-player lines."""
+    """Recompute team totals, winners and placings from the per-player lines."""
+    rec.refresh()
     if not rec.players:
         return rec
     scores: Dict[str, int] = {}
@@ -93,6 +95,41 @@ def finalize_record(rec: LeagueGameRecord, league: League) -> LeagueGameRecord:
         rec.winner_team_ids = []
     rec.winner_team_id = rec.winner_team_ids[0] if len(rec.winner_team_ids) == 1 else None
     return rec
+
+
+def _round_from_history(h: dict, i: int, players: List[RecordPlayer]) -> RecordRound:
+    names = [p.name for p in players]
+    deltas = list(h.get("deltas") or [])
+    totals = list(h.get("scores") or [])
+    tricks = list(h.get("tricks") or [])
+    bids = h.get("bids") or {}
+
+    def name_at(seat):
+        return names[seat] if seat is not None and 0 <= seat < len(names) else None
+
+    running = 0
+    lines = []
+    for seat in range(len(names)):
+        pts = deltas[seat] if seat < len(deltas) else 0
+        lines.append(RoundLine(
+            seat=seat,
+            name=names[seat],
+            bid=bids.get(str(seat)),
+            tricks=tricks[seat] if seat < len(tricks) else None,
+            points=pts,
+            total=totals[seat] if seat < len(totals) else running + pts,
+        ))
+    rnd = h.get("round", i + 1)
+    return RecordRound(
+        round=rnd,
+        cards_dealt=h.get("cards_dealt", rnd),
+        dealer_seat=h.get("dealer"),
+        dealer=name_at(h.get("dealer")),
+        trump=h.get("trump"),
+        trump_source=h.get("trump_source"),
+        trump_chosen_by=name_at(h.get("trump_chosen_by")),
+        players=lines,
+    )
 
 
 def record_from_game(game, league: League, seat_players: Dict[str, Optional[str]],
@@ -138,15 +175,7 @@ def record_from_game(game, league: League, seat_players: Dict[str, Optional[str]
         rounds_played=len(history) or state.current_round,
         bidding_mode=_val(state.bidding_mode),
         players=players,
-        rounds=[
-            RecordRound(
-                round=h.get("round", i + 1),
-                bids={str(k): v for k, v in (h.get("bids") or {}).items()},
-                tricks=list(h.get("tricks") or []),
-                deltas=list(h.get("deltas") or []),
-            )
-            for i, h in enumerate(history)
-        ],
+        rounds=[_round_from_history(h, i, players) for i, h in enumerate(history)],
     )
     for t in teams:
         tid = t.league_team_id or t.id

@@ -6,7 +6,7 @@ files are never touched.
 """
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 import uuid
 
 
@@ -35,23 +35,70 @@ class RecordPlayer(BaseModel):
     """One player's line in a recorded game.
 
     `league_player_id` is None for guests who are not on the league roster;
-    they show in the game detail but not on the leaderboard.
+    they show in the game detail but not on the leaderboard. `seat` is the
+    table seat for live games and the entry order for manual ones; round
+    lines refer to players by it.
     """
     name: str
     league_player_id: Optional[str] = None
     seat: Optional[int] = None
-    score: int = 0
+    score: int = 0                    # final points
+    place: Optional[int] = None       # 1 = winner; tied scores share a place
     team_id: Optional[str] = None
     bids_made: Optional[int] = None   # rounds where tricks == bid
     rounds_bid: Optional[int] = None  # rounds with a bid on record
 
 
+class RoundLine(BaseModel):
+    """One player's result for one hand."""
+    seat: int
+    name: str = ""
+    bid: Optional[int] = None
+    tricks: Optional[int] = None
+    points: int = 0   # scored this hand
+    total: int = 0    # cumulative score after this hand
+
+
 class RecordRound(BaseModel):
-    """Per-round breakdown for games recorded from a live table (seat-indexed)."""
     round: int
-    bids: Dict[str, int] = {}
-    tricks: List[int] = []
-    deltas: List[int] = []
+    cards_dealt: Optional[int] = None
+    dealer_seat: Optional[int] = None
+    dealer: Optional[str] = None           # dealer name snapshot
+    trump: Optional[str] = None            # "H" | "D" | "C" | "S"; None = no trump
+    trump_source: Optional[str] = None     # "flip" | "wizard" | "jester" | "none"
+    trump_chosen_by: Optional[str] = None  # name, when a Wizard flip let someone choose
+    players: List[RoundLine] = []
+
+
+def _upgrade_legacy_rounds(data: dict) -> dict:
+    """Convert {bids, tricks, deltas} rounds from older records into RoundLines."""
+    rounds = data.get("rounds") or []
+    if not rounds or not any(isinstance(r, dict) and "deltas" in r and "players" not in r for r in rounds):
+        return data
+    names = {}
+    for p in data.get("players") or []:
+        seat = p.get("seat") if isinstance(p, dict) else p.seat
+        name = p.get("name") if isinstance(p, dict) else p.name
+        if seat is not None:
+            names[seat] = name
+    totals: Dict[int, int] = {}
+    upgraded = []
+    for r in rounds:
+        if not (isinstance(r, dict) and "deltas" in r and "players" not in r):
+            upgraded.append(r)
+            continue
+        bids = r.get("bids") or {}
+        tricks = r.get("tricks") or []
+        lines = []
+        for seat, pts in enumerate(r.get("deltas") or []):
+            totals[seat] = totals.get(seat, 0) + pts
+            lines.append({
+                "seat": seat, "name": names.get(seat, ""),
+                "bid": bids.get(str(seat)), "tricks": tricks[seat] if seat < len(tricks) else None,
+                "points": pts, "total": totals[seat],
+            })
+        upgraded.append({"round": r.get("round"), "cards_dealt": r.get("round"), "players": lines})
+    return {**data, "rounds": upgraded}
 
 
 class LeagueGameRecord(BaseModel):
@@ -70,6 +117,24 @@ class LeagueGameRecord(BaseModel):
     team_colors: Dict[str, str] = {}  # team_id -> color snapshot
     winner_team_ids: List[str] = []   # more than one = tie
     winner_team_id: Optional[str] = None  # sole team winner (None on a tie)
+    final_only: bool = True           # True when no per-hand scores were recorded
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade(cls, data):
+        return _upgrade_legacy_rounds(data) if isinstance(data, dict) else data
+
+    @model_validator(mode="after")
+    def _derive(self):
+        self.refresh()
+        return self
+
+    def refresh(self) -> "LeagueGameRecord":
+        """Recompute stored derived fields: placings and final_only."""
+        for p in self.players:
+            p.place = 1 + sum(1 for q in self.players if q.score > p.score)
+        self.final_only = not self.rounds
+        return self
 
     @computed_field
     @property

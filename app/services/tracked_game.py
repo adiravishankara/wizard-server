@@ -44,12 +44,34 @@ class TrackedWizardGame(WizardGame):
             return card
         return None
 
+    def _trump_info(self) -> Dict[str, Any]:
+        n = len(self.state.players)
+        flip = self.flipped_card
+        if flip is not None and flip.type == CardType.WIZARD:
+            source = "wizard"
+        elif flip is not None and flip.type == CardType.JESTER:
+            source = "jester"
+        elif flip is not None:
+            source = "flip"
+        else:
+            source = "none"
+        return {
+            "trump": self.state.trump_suit,
+            "trump_source": source,
+            "trump_chosen_by": (self.state.dealer_idx - 1) % n if source == "wizard" and n else None,
+        }
+
     def score_round(self):
+        # Runs before the engine advances current_round / dealer_idx, so both
+        # still describe the hand that was just played.
         before = list(self.state.scores)
         super().score_round()
         after = list(self.state.scores)
         self.history.append({
             "round": self.state.current_round,
+            "cards_dealt": self.state.current_round,
+            "dealer": self.state.dealer_idx,
+            **self._trump_info(),
             "bids": {str(k): v for k, v in self.state.bids.items()},
             "tricks": list(self.state.trick_wins),
             "deltas": [a - b for a, b in zip(after, before)],
