@@ -83,6 +83,15 @@ def test_wire_state_names_right_of_dealer_as_chooser(n):
         assert view["flip"]["kind"] == "wizard"
 
 
+def test_wire_state_hides_stale_trump_while_choosing():
+    game = _seat(5, 2)
+    _deal_until(game, _wizard_flip)
+    game.state.trump_suit = "D"
+    view = player_state_dict(game, 0)
+    assert view["trump_suit"] is None
+    assert view["flip"]["suit"] is None
+
+
 def test_invalid_suit_rejected_for_chooser():
     game = _seat(3, 0)
     _deal_until(game, _wizard_flip)

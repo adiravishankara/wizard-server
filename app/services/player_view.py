@@ -35,7 +35,8 @@ def infer_flip(game) -> Dict[str, Any]:
     means nothing was flipped.
     """
     phase = _val(game.state.phase)
-    trump = game.state.trump_suit
+    # The engine leaves last round's suit in place until the Wizard chooser picks.
+    trump = None if phase == _val(GamePhase.WAITING_TRUMP) else game.state.trump_suit
     card = _card_json(getattr(game, "flipped_card", None))
     if phase in ("lobby", "game_over"):
         return {"kind": "none", "card": None}
@@ -80,6 +81,8 @@ def player_state_dict(game, player_idx: int) -> Dict[str, Any]:
         data["trick_complete"] = True
     else:
         data["trick_complete"] = False
+    if phase == _val(GamePhase.WAITING_TRUMP):
+        data["trump_suit"] = None
     data["flip"] = infer_flip(game)
     hands = getattr(game.state, "hands", None) or {}
     players = getattr(game.state, "players", None) or []
