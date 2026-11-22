@@ -10,6 +10,7 @@ table can show every card that was just played.
 from typing import Any, Dict, Optional
 
 from app.models.game import BiddingMode, GamePhase
+from app.services.lobby import lobby_view
 from app.services.trick_hold import dump_trick, get_hold
 
 # Duplicated from the engine for display only — not imported from game.py.
@@ -90,4 +91,6 @@ def player_state_dict(game, player_idx: int) -> Dict[str, Any]:
     data["history"] = list(getattr(game, "history", []) or [])
     ready = getattr(game, "players_ready_for_next_round", None) or set()
     data["ready"] = sorted(int(i) for i in ready)
+    from app.services.game_store import games
+    data.update(lobby_view(game, player_idx, games))
     return data

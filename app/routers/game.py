@@ -6,6 +6,8 @@ import uuid
 from app.models.game import BiddingMode, CardType
 from app.services.connection_manager import manager
 from app.services.game_store import games
+from app.services.league_links import carry_link, remap_link_seats
+from app.services.lobby import get_meta, is_host, peek_meta, phase_of, shuffle_seats
 from app.services.player_view import player_state_dict
 from app.services.tracked_game import TrackedWizardGame
 from app.services.trick_hold import clear_hold, set_hold
@@ -21,6 +23,20 @@ class JoinRequest(BaseModel):
 class RejoinRequest(BaseModel):
     game_id: str
     token: str
+
+class TokenRequest(BaseModel):
+    token: str
+
+
+class RematchRequest(BaseModel):
+    token: str
+    shuffle: bool = True
+
+
+class LobbySettingsRequest(BaseModel):
+    token: str
+    shuffle_on_start: bool
+
 
 class ActionRequest(BaseModel):
     player_id: int
@@ -54,6 +70,7 @@ async def join_game(request: JoinRequest):
     # Generate session token
     token = str(uuid.uuid4())
     game.state.player_tokens[token] = player_idx
+    get_meta(game_id).host_token = token
 
     # No broadcast needed for the very first player since they just joined and no one else is there
     return {"game_id": game_id, "player_id": player_idx, "token": token}
@@ -84,12 +101,108 @@ async def start_game(game_id: str):
     if game_id not in games:
         raise HTTPException(status_code=404, detail="Game not found")
     game = games[game_id]
+    meta = peek_meta(game_id)
+    if meta and meta.shuffle_on_start and phase_of(game) == "lobby" and len(game.state.players) >= 3:
+        _apply_shuffle(game)
     if game.start_game():
         clear_hold(game_id)
         await manager.broadcast_state(game_id, game)
         return {"status": "started"}
     else:
         raise HTTPException(status_code=400, detail="Need at least 3 players to start")
+
+def _game_or_404(game_id: str):
+    game = games.get(game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return game
+
+
+def _apply_shuffle(game):
+    gid = game.state.game_id
+    old_to_new = shuffle_seats(game)
+    manager.remap(gid, old_to_new)
+    remap_link_seats(gid, old_to_new)
+    return old_to_new
+
+
+@router.post("/{game_id}/shuffle")
+async def shuffle_lobby(game_id: str, request: TokenRequest):
+    game = _game_or_404(game_id)
+    if not is_host(game, request.token):
+        raise HTTPException(status_code=403, detail="Only the host can shuffle seats")
+    if phase_of(game) != "lobby":
+        raise HTTPException(status_code=400, detail="Seats can only be shuffled before the game starts")
+    _apply_shuffle(game)
+    await manager.broadcast_state(game_id, game)
+    return {"players": game.state.players, "player_id": game.state.player_tokens[request.token]}
+
+
+@router.post("/{game_id}/lobby-settings")
+async def lobby_settings(game_id: str, request: LobbySettingsRequest):
+    game = _game_or_404(game_id)
+    if not is_host(game, request.token):
+        raise HTTPException(status_code=403, detail="Only the host can change lobby settings")
+    get_meta(game_id).shuffle_on_start = request.shuffle_on_start
+    await manager.broadcast_state(game_id, game)
+    return {"shuffle_on_start": request.shuffle_on_start}
+
+
+async def _join_rematch(old, new, token: str):
+    old_meta = get_meta(old.state.game_id)
+    new_id = new.state.game_id
+    existing = old_meta.rematch_tokens.get(token)
+    if existing and existing in new.state.player_tokens:
+        seat = new.state.player_tokens[existing]
+        return {"game_id": new_id, "player_id": seat, "token": existing, "name": new.state.players[seat]}
+    name = old.state.players[old.state.player_tokens[token]]
+    seat = new.add_player(name)
+    if seat == -1:
+        raise HTTPException(status_code=400, detail="The rematch has already started or is full")
+    new_token = str(uuid.uuid4())
+    new.state.player_tokens[new_token] = seat
+    old_meta.rematch_tokens[token] = new_token
+    new_meta = get_meta(new_id)
+    if new_meta.host_token is None:
+        new_meta.host_token = new_token
+    carry_link(old, new)
+    await manager.broadcast_state(new_id, new)
+    await manager.broadcast_state(old.state.game_id, old)
+    return {"game_id": new_id, "player_id": seat, "token": new_token, "name": name}
+
+
+@router.post("/{game_id}/rematch")
+async def create_rematch(game_id: str, request: RematchRequest):
+    old = _game_or_404(game_id)
+    if request.token not in old.state.player_tokens:
+        raise HTTPException(status_code=403, detail="Invalid session token")
+    if phase_of(old) != "game_over":
+        raise HTTPException(status_code=400, detail="A rematch can start once the game is over")
+    meta = get_meta(game_id)
+    new = games.get(meta.rematch_id) if meta.rematch_id else None
+    if new is None:
+        new_id = str(uuid.uuid4())[:8]
+        new = TrackedWizardGame(new_id, old.state.bidding_mode)
+        games[new_id] = new
+        new_meta = get_meta(new_id)
+        new_meta.rematch_of = game_id
+        new_meta.expected = list(old.state.players)
+        new_meta.shuffle_on_start = request.shuffle
+        meta.rematch_id = new_id
+    return await _join_rematch(old, new, request.token)
+
+
+@router.post("/{game_id}/rematch/join")
+async def join_rematch(game_id: str, request: TokenRequest):
+    old = _game_or_404(game_id)
+    if request.token not in old.state.player_tokens:
+        raise HTTPException(status_code=403, detail="Invalid session token")
+    meta = get_meta(game_id)
+    new = games.get(meta.rematch_id) if meta.rematch_id else None
+    if new is None:
+        raise HTTPException(status_code=404, detail="No rematch has been started for this game")
+    return await _join_rematch(old, new, request.token)
+
 
 @router.post("/{game_id}/ready")
 async def player_ready(game_id: str, request: ActionRequest):

@@ -36,14 +36,28 @@ class ConnectionManager:
         """
         if game_id not in self.active_connections:
             return
-        current = self.active_connections[game_id].get(player_idx)
-        if current is None:
-            return
+        conns = self.active_connections[game_id]
+        current = conns.get(player_idx)
         if websocket is not None and current is not websocket:
+            # The socket may have moved seats after a lobby shuffle.
+            moved = [idx for idx, ws in conns.items() if ws is websocket]
+            if not moved:
+                return
+            player_idx = moved[0]
+        elif current is None:
             return
-        del self.active_connections[game_id][player_idx]
+        del conns[player_idx]
         if not self.active_connections[game_id]:
             del self.active_connections[game_id]
+
+    def remap(self, game_id: str, old_to_new: Dict[int, int]) -> None:
+        """Move sockets to their new seats after the lobby order changes."""
+        conns = self.active_connections.get(game_id)
+        if not conns:
+            return
+        self.active_connections[game_id] = {
+            old_to_new.get(idx, idx): ws for idx, ws in conns.items()
+        }
 
     async def broadcast_state(self, game_id: str, game_instance):
         """Broadcast redacted state to each player individually."""

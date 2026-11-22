@@ -19,6 +19,7 @@ from app.main import app  # noqa: E402
 from app.services.connection_manager import manager  # noqa: E402
 from app.services.game_store import games  # noqa: E402
 from app.services.league_store import JsonBackend, store as league_store  # noqa: E402
+from app.services.lobby import clear_all as clear_lobby_meta  # noqa: E402
 from app.services.trick_hold import clear_all as clear_trick_holds  # noqa: E402
 
 
@@ -52,11 +53,13 @@ def client():
     games.clear()
     manager.active_connections.clear()
     clear_trick_holds()
+    clear_lobby_meta()
     with TestClient(app) as test_client:
         yield test_client
     games.clear()
     manager.active_connections.clear()
     clear_trick_holds()
+    clear_lobby_meta()
 
 
 @pytest.fixture
@@ -64,6 +67,7 @@ def live_server():
     games.clear()
     manager.active_connections.clear()
     clear_trick_holds()
+    clear_lobby_meta()
     port = _free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
@@ -76,3 +80,4 @@ def live_server():
     games.clear()
     manager.active_connections.clear()
     clear_trick_holds()
+    clear_lobby_meta()
