@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.connection_manager import manager
 from app.services.game_store import games
+from app.services.trick_hold import clear_all as clear_trick_holds
 
 
 def _free_port() -> int:
@@ -34,16 +35,19 @@ def _wait_for_port(port: int, timeout: float = 8.0) -> None:
 def client():
     games.clear()
     manager.active_connections.clear()
+    clear_trick_holds()
     with TestClient(app) as test_client:
         yield test_client
     games.clear()
     manager.active_connections.clear()
+    clear_trick_holds()
 
 
 @pytest.fixture
 def live_server():
     games.clear()
     manager.active_connections.clear()
+    clear_trick_holds()
     port = _free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
@@ -55,3 +59,4 @@ def live_server():
     thread.join(timeout=5)
     games.clear()
     manager.active_connections.clear()
+    clear_trick_holds()

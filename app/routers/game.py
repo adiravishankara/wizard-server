@@ -8,6 +8,7 @@ from app.models.game import BiddingMode, CardType
 from app.services.connection_manager import manager
 from app.services.game_store import games
 from app.services.player_view import player_state_dict
+from app.services.trick_hold import clear_hold, set_hold
 
 router = APIRouter()
 
@@ -84,6 +85,7 @@ async def start_game(game_id: str):
         raise HTTPException(status_code=404, detail="Game not found")
     game = games[game_id]
     if game.start_game():
+        clear_hold(game_id)
         await manager.broadcast_state(game_id, game)
         return {"status": "started"}
     else:
@@ -96,6 +98,8 @@ async def player_ready(game_id: str, request: ActionRequest):
     game = games[game_id]
 
     if game.player_ready(request.player_id):
+        if getattr(game.state.phase, "value", game.state.phase) != "round_over":
+            clear_hold(game_id)
         await manager.broadcast_state(game_id, game)
         return {"status": "success"}
     else:
@@ -126,11 +130,25 @@ async def game_action(game_id: str, request: ActionRequest):
                 else:
                     error_detail = "This card cannot be played now."
             else:
+                would_complete = (
+                    len(game.state.current_trick) + 1 == len(game.state.players)
+                )
+                completed = (
+                    list(game.state.current_trick) + [(request.player_id, card)]
+                    if would_complete
+                    else None
+                )
                 success = game.play_card(request.player_id, request.value)
+                if success:
+                    if completed:
+                        set_hold(game_id, completed)
+                    else:
+                        clear_hold(game_id)
     elif request.action == "choose_trump":
         success = game.choose_trump(request.player_id, request.suit)
         if not success:
-            error_detail = "Only the dealer can choose trump, and it must be a valid suit."
+            chooser = game.state.players[game.state.dealer_idx] if game.state.players else "the dealer"
+            error_detail = f"Only {chooser} can choose trump, and it must be a valid suit."
 
     if success:
         await manager.broadcast_state(game_id, game)

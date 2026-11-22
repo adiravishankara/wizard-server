@@ -227,6 +227,10 @@ def test_health_and_index(client):
     assert home.status_code == 200
     assert "Wizard" in home.text
     assert "Blind / Canadian" in home.text
+    assert 'id="theme-light"' in home.text
+    assert 'id="theme-dark"' in home.text
+    assert 'id="status-line"' in home.text
+    assert 'id="btn-play"' in home.text
 
 
 def test_create_game_exposes_all_existing_modes(client):
@@ -319,6 +323,39 @@ def test_canadian_forbids_even_total_on_last_bid(live_server):
         assert players[0].state["phase"] == "playing"
 
 
+def test_completed_trick_stays_visible_until_next_lead(live_server):
+    with httpx.Client(base_url=live_server["http"], timeout=10) as http:
+        players = seat(http, live_server["ws"], ["Ada", "Bea", "Cal"], "sequential")
+        play_rounds(http, players, "sequential", rounds=1)
+        maybe_choose_trump(http, players)
+        bid_all(http, players, "sequential")
+        n = len(players)
+        for _ in range(n):
+            current = players[0].state["current_player"]
+            actor = by_id(players, current)
+            legal = actor.state.get("legal_moves") or [0]
+            res = http.post(
+                f"/api/game/{players[0].game_id}/action",
+                json={"player_id": current, "action": "play", "value": legal[0]},
+            )
+            assert res.status_code == 200, res.text
+            drain(players)
+        assert players[0].state["phase"] == "playing"
+        assert players[0].state.get("trick_complete") is True
+        assert len(players[0].state["current_trick"]) == n
+        current = players[0].state["current_player"]
+        actor = by_id(players, current)
+        legal = actor.state.get("legal_moves") or [0]
+        res = http.post(
+            f"/api/game/{players[0].game_id}/action",
+            json={"player_id": current, "action": "play", "value": legal[0]},
+        )
+        assert res.status_code == 200, res.text
+        drain(players)
+        assert players[0].state.get("trick_complete") is False
+        assert len(players[0].state["current_trick"]) == 1
+
+
 def test_all_three_players_rejoin_after_drop(live_server):
     with httpx.Client(base_url=live_server["http"], timeout=10) as http:
         players = seat(http, live_server["ws"], ["Ada", "Bea", "Cal"], "sequential")
@@ -347,6 +384,12 @@ def test_stale_websocket_disconnect_does_not_drop_replacement():
             bidding_mode = "sequential"
             phase = "lobby"
             bids = {}
+            game_id = "g"
+            players = ["Ada"]
+            current_round = 1
+            trump_suit = None
+            dealer_idx = 0
+            current_player = 0
 
         class FakeGame:
             def __init__(self):
@@ -387,7 +430,8 @@ def test_stale_websocket_disconnect_does_not_drop_replacement():
         mgr.disconnect("g", 0, old)
         assert mgr.active_connections["g"][0] is new
         await mgr.broadcast_state("g", FakeGame())
-        assert new.sent == [{"player_id": 0, "bids": {}}]
+        assert new.sent[0]["player_id"] == 0
+        assert new.sent[0]["trick_complete"] is False
         assert old.sent == []
 
     asyncio.run(_run())

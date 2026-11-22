@@ -1,7 +1,7 @@
 """Blind / Canadian (SECRET) bid hiding without touching app/core/game.py."""
 from app.core.game import WizardGame
 from app.models.game import BiddingMode, GamePhase
-from app.services.player_view import player_state_dict
+from app.services.player_view import infer_flip, player_state_dict
 
 
 def _three_player_secret():
@@ -77,3 +77,40 @@ def test_five_player_secret_hides_until_hand_end():
     assert game.state.phase == GamePhase.ROUND_OVER
     view = player_state_dict(game, 4)
     assert all(view["bids"][str(i)] == 0 for i in range(5))
+
+
+def test_infer_flip_wizard_waiting_trump():
+    game = WizardGame("flip-w", BiddingMode.SEQUENTIAL)
+    for name in ("Ada", "Bea", "Cal"):
+        game.add_player(name)
+    game.state.dealer_idx = 0
+    game.state.current_round = 1
+    found = False
+    for _ in range(400):
+        game.deal()
+        if game.state.phase == GamePhase.WAITING_TRUMP:
+            found = True
+            break
+    assert found
+    flip = infer_flip(game)
+    assert flip["kind"] == "wizard"
+    view = player_state_dict(game, 1)
+    assert view["flip"]["kind"] == "wizard"
+    assert view["current_player"] == game.state.dealer_idx
+
+
+def test_infer_flip_jester_is_no_trump():
+    game = WizardGame("flip-j", BiddingMode.SEQUENTIAL)
+    for name in ("Ada", "Bea", "Cal"):
+        game.add_player(name)
+    game.state.dealer_idx = 0
+    game.state.current_round = 1
+    found = False
+    for _ in range(400):
+        game.deal()
+        if game.state.phase == GamePhase.BIDDING and game.state.trump_suit is None:
+            found = True
+            break
+    assert found
+    flip = infer_flip(game)
+    assert flip["kind"] == "jester"

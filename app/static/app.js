@@ -12,6 +12,7 @@ const S = {
   draftTeams: [],     // lobby team editor: [{id, name, color, player_indices, league_team_id}]
   draftLeagueId: null,
   bidVal: 0,
+  selected: null,     // hand index pending confirm
   league: null,       // open league detail
 };
 
@@ -72,6 +73,38 @@ function showView(which) {
 }
 $("nav-games").onclick = () => showView("games");
 $("nav-leagues").onclick = () => showView("leagues");
+
+const THEME_KEY = "wizard_theme";
+function systemTheme() {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+function applyTheme(pref) {
+  const resolved = pref === "system" ? systemTheme() : pref;
+  document.documentElement.setAttribute("data-theme", resolved);
+  document.documentElement.setAttribute("data-theme-pref", pref);
+  try { localStorage.setItem(THEME_KEY, pref); } catch { /* ignore */ }
+  ["light", "dark", "system"].forEach((name) => {
+    const btn = $(`theme-${name}`);
+    if (btn) btn.classList.toggle("active", pref === name);
+  });
+}
+function initTheme() {
+  let pref = "light";
+  try { pref = localStorage.getItem(THEME_KEY) || "light"; } catch { /* ignore */ }
+  if (!["light", "dark", "system"].includes(pref)) pref = "light";
+  applyTheme(pref);
+  ["light", "dark", "system"].forEach((name) => {
+    const btn = $(`theme-${name}`);
+    if (btn) btn.onclick = () => applyTheme(name);
+  });
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const onSys = () => {
+    if (document.documentElement.getAttribute("data-theme-pref") === "system") applyTheme("system");
+  };
+  if (mq.addEventListener) mq.addEventListener("change", onSys);
+  else if (mq.addListener) mq.addListener(onSys);
+}
+initTheme();
 
 /* ---------- games home ---------- */
 $("btn-create").onclick = async () => {
@@ -138,6 +171,7 @@ async function resumeSession(sess) {
 /* ---------- game screen ---------- */
 function enterGame(sess) {
   S.session = sess;
+  S.selected = null;
   saveSession(sess);
   S.draftTeams = [];
   S.draftLeagueId = null;
@@ -199,17 +233,97 @@ function rankLabel(r) {
   return r === 11 ? "J" : r === 12 ? "Q" : r === 13 ? "K" : r === 14 ? "A" : String(r);
 }
 function cardHTML(card, opts = {}) {
-  const t = card.type;
-  if (t === "wizard")
-    return `<div class="playing-card special ${opts.cls || ""}" ${opts.attrs || ""}>
-      <span class="corner">W</span>🧙${opts.who || ""}</div>`;
-  if (t === "jester")
-    return `<div class="playing-card special ${opts.cls || ""}" ${opts.attrs || ""}>
-      <span class="corner">J</span>🃏${opts.who || ""}</div>`;
-  const red = (card.suit === "H" || card.suit === "D") ? " red" : "";
-  const label = `${SUIT_SYM[card.suit] || "?"}${rankLabel(card.rank)}`;
-  return `<div class="playing-card${red} ${opts.cls || ""}" ${opts.attrs || ""}>
-    <span class="corner">${esc(label)}</span>${esc(label)}${opts.who || ""}</div>`;
+  const who = opts.who || "";
+  const extra = opts.cls || "";
+  const attrs = opts.attrs || "";
+  if (card.type === "wizard") {
+    return `<div class="playing-card special wizard ${extra}" ${attrs}>
+      <span class="c-corner tl">W</span>
+      <span class="c-center special-label">WIZARD</span>
+      <span class="c-corner br">W</span>${who}</div>`;
+  }
+  if (card.type === "jester") {
+    return `<div class="playing-card special jester ${extra}" ${attrs}>
+      <span class="c-corner tl">JE</span>
+      <span class="c-center special-label">JESTER</span>
+      <span class="c-corner br">JE</span>${who}</div>`;
+  }
+  const red = (card.suit === "H" || card.suit === "D");
+  const rl = rankLabel(card.rank);
+  const s = SUIT_SYM[card.suit] || "";
+  const center = card.rank >= 11
+    ? `<span class="c-face">${esc(rl)}</span><span class="c-pip">${s}</span>`
+    : `<span class="c-pip big">${s}</span>`;
+  return `<div class="playing-card ${red ? "red" : "black"} ${extra}" ${attrs}>
+    <span class="c-corner tl"><b>${esc(rl)}</b><br>${s}</span>
+    <span class="c-center">${center}</span>
+    <span class="c-corner br"><b>${esc(rl)}</b><br>${s}</span>${who}</div>`;
+}
+function layoutFan(container) {
+  const cards = [...container.querySelectorAll(".playing-card")];
+  const n = cards.length;
+  if (!n) return;
+  const maxW = container.clientWidth || 360;
+  const w = cards[0].getBoundingClientRect().width || 82;
+  const step = n === 1 ? 0 : Math.min(w - 16, Math.max(16, (maxW - w - 8) / (n - 1)));
+  cards.forEach((el, i) => {
+    el.style.marginLeft = i === 0 ? "0px" : `${(step - w).toFixed(1)}px`;
+    el.style.zIndex = String(i + 1);
+  });
+}
+function initials(name) {
+  const parts = String(name || "?").trim().split(/\s+/);
+  const a = (parts[0] || "?")[0] || "?";
+  const b = parts.length > 1 ? parts[1][0] : (parts[0][1] || "");
+  return (a + b).toUpperCase();
+}
+function avatarHue(name) {
+  let h = 0;
+  for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+function playerBadge(st, i) {
+  const name = st.players[i];
+  const bid = bidShown(st, i);
+  const won = st.trick_wins[i] ?? 0;
+  const trump = st.trump_suit ? SUIT_SYM[st.trump_suit] : "";
+  const trumpRed = st.trump_suit === "H" || st.trump_suit === "D";
+  const turn = st.current_player === i && st.phase !== "lobby" && st.phase !== "round_over";
+  const me = st.player_id === i;
+  const stat = st.phase === "lobby" ? "" : `<div class="pbadge-stat">${won}/${bid}</div>`;
+  return `<div class="pbadge ${turn ? "turn" : ""} ${me ? "me" : ""}">
+    <div class="avatar" style="background:hsl(${avatarHue(name)} 62% 42%)">${esc(initials(name))}</div>
+    <div>
+      <div class="pbadge-name">${esc(name)}</div>
+      <div class="pbadge-meta">${st.scores[i]} pts${i === st.dealer_idx && st.phase !== "lobby" ? " · dealer" : ""}</div>
+    </div>
+    ${stat}
+    <div class="pbadge-trump ${trumpRed ? "red" : ""}">${trump}</div>
+  </div>`;
+}
+function statusText(st) {
+  const name = st.players[st.current_player] ?? "";
+  const me = st.player_id === st.current_player;
+  if (st.phase === "lobby") return "Waiting for players…";
+  if (st.phase === "waiting_trump") {
+    return me ? "Your turn to choose trump" : `Waiting for ${name} to choose trump…`;
+  }
+  if (st.phase === "bidding") {
+    const open = st.bidding_mode === "simultaneous" || st.bidding_mode === "secret";
+    const myBid = st.bids[String(st.player_id)] ?? st.bids[st.player_id];
+    if (open) {
+      if (myBid === null || myBid === undefined) return "Your turn to bid";
+      return "Waiting for others to bid…";
+    }
+    return me ? "Your turn to bid" : `Waiting for ${name} to bid…`;
+  }
+  if (st.phase === "playing") {
+    if (st.trick_complete) return `Trick complete — ${name} leads next`;
+    return me ? "Your turn to play" : `Waiting for ${name} to play…`;
+  }
+  if (st.phase === "round_over") return "Round over";
+  if (st.phase === "game_over") return "Game over";
+  return "";
 }
 
 /* ----- main render ----- */
@@ -218,18 +332,35 @@ function renderGame() {
   if (!st) return;
   const me = st.player_id;
 
-  $("g-phase").textContent = phaseLabel(st.phase);
-  $("g-round").textContent = `Round ${st.current_round}`;
-  $("g-trump").textContent = st.trump_suit ? `Trump ${SUIT_SYM[st.trump_suit]}` : "No trump";
+  const roundNo = st.phase === "round_over" && st.current_round > 1
+    ? st.current_round - 1
+    : st.current_round;
+  $("g-round").textContent = `R${roundNo}`;
+  $("g-round").classList.toggle("hidden", st.phase === "lobby");
+  const trumpEl = $("g-trump");
+  if (st.phase === "waiting_trump") {
+    trumpEl.textContent = "Choosing trump";
+    trumpEl.classList.remove("none");
+  } else if (st.trump_suit) {
+    const red = st.trump_suit === "H" || st.trump_suit === "D";
+    trumpEl.innerHTML = `Trump <span class="${red ? "red" : ""}">${SUIT_SYM[st.trump_suit]}</span>`;
+    trumpEl.classList.remove("none");
+  } else {
+    trumpEl.textContent = "No trump";
+    trumpEl.classList.add("none");
+  }
+  $("status-line").textContent = statusText(st);
+  trumpEl.classList.toggle("hidden", st.phase === "lobby");
 
   const isLobby = st.phase === "lobby";
+  $("game-screen").classList.toggle("in-lobby", isLobby);
+  const scoresView = st.phase === "round_over" || st.phase === "game_over";
   $("lobby-panel").classList.toggle("hidden", !isLobby);
-  $("table-panel").classList.toggle("hidden", isLobby);
-  $("hand-panel").classList.toggle("hidden", isLobby);
+  $("table-panel").classList.toggle("hidden", isLobby || scoresView);
+  $("hand-panel").classList.toggle("hidden", isLobby || scoresView || st.phase === "waiting_trump");
 
   if (isLobby) { renderLobby(st); }
 
-  // bidding
   const myBid = st.bids[String(me)] ?? st.bids[me];
   const canBid = st.phase === "bidding" && (myBid === null || myBid === undefined) &&
     (st.bidding_mode !== "sequential" && st.bidding_mode !== "canadian" || st.current_player === me);
@@ -237,50 +368,86 @@ function renderGame() {
   if (canBid) {
     S.bidVal = Math.min(S.bidVal, st.current_round);
     $("bid-value").textContent = S.bidVal;
-    $("bid-info").textContent =
-      `Round ${st.current_round}: bid 0–${st.current_round} tricks. ` +
-      (st.bidding_mode === "canadian" ? "Canadian rule: last bidder can't make totals equal the round. " : "") +
-      (st.bidding_mode === "secret" ? "Blind: other bids stay hidden until this hand ends. " : "");
+    $("bid-info").textContent = `Bid 0–${st.current_round}`;
   }
 
-  // trump
-  const needTrump = st.phase === "waiting_trump" && st.current_player === me;
-  $("trump-panel").classList.toggle("hidden", !needTrump);
+  const choosingTrump = st.phase === "waiting_trump";
+  $("trump-panel").classList.toggle("hidden", !choosingTrump);
+  if (choosingTrump) {
+    const chooser = st.players[st.current_player] ?? "someone";
+    $("trump-flip").innerHTML = cardHTML({ type: "wizard" });
+    $("trump-caption").textContent = "Wizard flipped";
+    const mine = st.current_player === me;
+    $("trump-actions").classList.toggle("hidden", !mine);
+    $("trump-wait").classList.toggle("hidden", mine);
+    $("trump-wait").textContent = `${chooser} is choosing trump…`;
+  }
 
-  // trick + turn
+  const others = st.players.map((_, i) => i).filter((i) => i !== me);
+  $("opponents").innerHTML = others.map((i) => playerBadge(st, i)).join("");
+  $("you-badge").innerHTML = playerBadge(st, me);
+
   const trick = $("trick-area");
-  trick.innerHTML = st.current_trick.length
-    ? st.current_trick.map(([pi, c]) =>
-        cardHTML(c, { who: `<span class="who">${esc(st.players[pi])}</span>` })).join("")
-    : `<span class="hint">No cards played yet.</span>`;
-  const turnName = st.players[st.current_player] ?? "";
-  const openBid = st.bidding_mode === "simultaneous" || st.bidding_mode === "secret";
-  $("turn-info").innerHTML =
-    st.phase === "playing" ? `<strong>${esc(turnName)}</strong>'s turn to play` :
-    st.phase === "bidding" ? (
-      openBid ? "Waiting for bids" : `<strong>${esc(turnName)}</strong> is bidding`
-    ) :
-    st.phase === "waiting_trump" ? `<strong>${esc(turnName)}</strong> chooses trump` : "";
+  if (st.phase === "waiting_trump") {
+    trick.innerHTML = "";
+  } else if (st.current_trick.length) {
+    trick.innerHTML = st.current_trick.map(([pi, c]) =>
+      cardHTML(c, { who: `<span class="who">${esc(st.players[pi])}</span>` })).join("");
+  } else if (st.flip && st.flip.kind === "jester" && st.phase === "bidding") {
+    trick.innerHTML = `<div class="flip-on-table">${cardHTML({ type: "jester" })}<span class="who">No trump</span></div>`;
+  } else {
+    trick.innerHTML = `<span class="hint">No cards played yet.</span>`;
+  }
+  trick.classList.toggle("hidden", !trick.innerHTML);
 
-  // hand
+  const myTurn = st.phase === "playing" && st.current_player === me && !st.trick_complete;
+  if (!myTurn) S.selected = null;
+  if (S.selected != null && !st.legal_moves.includes(S.selected)) S.selected = null;
   const hand = $("hand");
   hand.innerHTML = st.hand.length
     ? st.hand.map((c, i) => {
-        const legal = st.legal_moves.includes(i) && st.phase === "playing" && st.current_player === me;
-        return cardHTML(c, { cls: legal ? "legal" : "", attrs: legal ? `data-card="${i}"` : "" });
+        const legal = myTurn && st.legal_moves.includes(i);
+        const cls = [
+          !myTurn ? "" : (legal ? "legal" : "illegal"),
+          S.selected === i ? "selected" : "",
+        ].join(" ");
+        return cardHTML(c, { cls, attrs: `data-card="${i}"` });
       }).join("")
     : `<span class="hint">Waiting for the deal…</span>`;
-  hand.querySelectorAll("[data-card]").forEach((el) =>
-    el.onclick = () => playCard(parseInt(el.dataset.card, 10)));
+  layoutFan(hand);
+  hand.querySelectorAll("[data-card]").forEach((el) => {
+    el.onclick = () => {
+      const i = parseInt(el.dataset.card, 10);
+      if (!(myTurn && st.legal_moves.includes(i))) return;
+      S.selected = S.selected === i ? null : i;
+      renderGame();
+    };
+  });
+  const playBtn = $("btn-play");
+  playBtn.classList.toggle("hidden", !(myTurn && S.selected != null));
+  if (S.selected != null) {
+    const c = st.hand[S.selected];
+    const lab = c.type === "wizard" ? "Wizard" : c.type === "jester" ? "Jester"
+      : `${rankLabel(c.rank)}${SUIT_SYM[c.suit] || ""}`;
+    playBtn.textContent = `Play ${lab}`;
+  } else {
+    playBtn.textContent = "Play card";
+  }
 
-  // round over / game over
   $("roundover-panel").classList.toggle("hidden", st.phase !== "round_over");
+  if (st.phase === "round_over") {
+    $("round-scores").innerHTML = st.players.map((p, i) =>
+      `<div class="score-row ${i === me ? "me" : ""}">
+        <div><strong>${esc(p)}</strong>
+          <span class="bid-chip">${st.trick_wins[i] ?? 0}/${bidShown(st, i)}</span></div>
+        <div><strong>${st.scores[i]}</strong></div>
+      </div>`).join("");
+  }
   const over = st.phase === "game_over";
   $("gameover-panel").classList.toggle("hidden", !over);
   if (over) renderGameOver(st);
 
   renderScores(st);
-  renderPlayersSide(st);
   refreshTeamScores();
 }
 
@@ -297,6 +464,12 @@ async function doAction(body) {
   } catch (e) { alertMsg(e.message); }
 }
 function playCard(i) { doAction({ action: "play", value: i }); }
+$("btn-play").onclick = () => {
+  if (S.selected == null) return;
+  const i = S.selected;
+  S.selected = null;
+  playCard(i);
+};
 
 $("bid-minus").onclick = () => { S.bidVal = Math.max(0, S.bidVal - 1); $("bid-value").textContent = S.bidVal; };
 $("bid-plus").onclick = () => {
@@ -321,9 +494,7 @@ $("btn-ready").onclick = async () => {
 
 /* ----- lobby + teams ----- */
 function renderLobby(st) {
-  $("lobby-players").innerHTML = st.players.map((p, i) =>
-    `<div class="player-row"><span>${i === st.player_id ? "<strong>" : ""}${esc(p)}${i === st.player_id ? "</strong> (you)" : ""}</span>
-     ${i === st.dealer_idx ? `<span class="hint">dealer</span>` : ""}</div>`).join("");
+  $("lobby-players").innerHTML = st.players.map((_, i) => playerBadge(st, i)).join("");
   renderTeamEditor(st);
 }
 
@@ -443,11 +614,9 @@ function renderScores(st) {
   }).join("");
 }
 
-function renderPlayersSide(st) {
-  $("players-side").innerHTML = st.players.map((p, i) =>
-    `<div class="player-row"><span>${i === st.dealer_idx ? "🎴 " : ""}${esc(p)}${i === st.player_id ? " (you)" : ""}</span>
-     <span class="meta">${i === st.current_player ? "▶ turn" : ""}</span></div>`).join("");
-}
+window.addEventListener("resize", () => {
+  if (S.state) layoutFan($("hand"));
+});
 
 let teamScoreTimer = null;
 async function refreshTeamScores() {
@@ -670,7 +839,20 @@ async function renderLeagueGames() {
 
 /* ---------- init ---------- */
 renderSessions();
-try {
-  const active = JSON.parse(sessionStorage.getItem("wizard_active") || "null");
-  if (active && active.token) resumeSession(active);
-} catch { /* ignore */ }
+const params = new URLSearchParams(location.search);
+if (["light", "dark", "system"].includes(params.get("theme") || "")) {
+  applyTheme(params.get("theme"));
+}
+if (params.get("rejoin") && params.get("token")) {
+  resumeSession({
+    game_id: params.get("rejoin"),
+    token: params.get("token"),
+    player_id: 0,
+    name: params.get("name") || "",
+  });
+} else {
+  try {
+    const active = JSON.parse(sessionStorage.getItem("wizard_active") || "null");
+    if (active && active.token) resumeSession(active);
+  } catch { /* ignore */ }
+}
