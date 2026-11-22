@@ -10,7 +10,7 @@ def _three_player_secret():
         game.add_player(name)
     assert game.start_game()
     if game.state.phase == GamePhase.WAITING_TRUMP:
-        game.choose_trump(game.state.dealer_idx, "H")
+        assert game.choose_trump(game.state.current_player, "H")
     assert game.state.phase == GamePhase.BIDDING
     return game
 
@@ -61,7 +61,7 @@ def test_five_player_secret_hides_until_hand_end():
         game.add_player(name)
     assert game.start_game()
     if game.state.phase == GamePhase.WAITING_TRUMP:
-        game.choose_trump(game.state.dealer_idx, "H")
+        assert game.choose_trump(game.state.current_player, "H")
     _bid_remaining(game, 0)
     assert game.state.phase == GamePhase.PLAYING
     view = player_state_dict(game, 2)
@@ -96,7 +96,7 @@ def test_infer_flip_wizard_waiting_trump():
     assert flip["kind"] == "wizard"
     view = player_state_dict(game, 1)
     assert view["flip"]["kind"] == "wizard"
-    assert view["current_player"] == game.state.dealer_idx
+    assert view["current_player"] == (game.state.dealer_idx - 1) % 3
 
 
 def test_infer_flip_jester_is_no_trump():

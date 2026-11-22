@@ -75,11 +75,13 @@ def maybe_choose_trump(http, players):
     state = players[0].state
     if state["phase"] != "waiting_trump":
         return
-    dealer = state["current_player"]
+    n = len(state["players"])
+    chooser = state["current_player"]
+    assert chooser == (state["dealer_idx"] - 1) % n
     res = http.post(
         f"/api/game/{state['game_id']}/action",
         json={
-            "player_id": dealer,
+            "player_id": chooser,
             "action": "choose_trump",
             "value": 0,
             "suit": "H",
