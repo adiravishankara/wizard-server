@@ -103,10 +103,14 @@ uvicorn app.main:app --port 8000
 
 ```
 leagues/{leagueId}                    name, created_at, players{id: {name, joined_at}}, teams{id: {name, color, player_ids[]}}
-leagues/{leagueId}/games/{recordId}   played_at, source (live|manual), bidding_mode, rounds_played,
-                                      players[{name, league_player_id, seat, score, team_id, bids_made, rounds_bid}],
-                                      rounds[{round, bids{seat: bid}, tricks[], deltas[]}],
-                                      team_scores{}, team_names{}, team_colors{}, winner_team_ids[], notes
+leagues/{leagueId}/games/{recordId}   played_at, edited_at, source (live|manual), bidding_mode, rounds_played, final_only,
+                                      players[{name, league_player_id, seat, score, place, team_id, bids_made, rounds_bid}],
+                                      rounds[{round, cards_dealt, dealer_seat, dealer, trump (H|D|C|S|null),
+                                              trump_source (flip|wizard|jester|none), trump_chosen_by,
+                                              players[{seat, name, bid, tricks, points, total}]}],
+                                      team_scores{}, team_names{}, team_colors{}, winner_team_ids[], winner_team_id, notes
 ```
+
+Live games always store every hand. A result added by hand stores hands only if they were entered, otherwise `rounds` is empty and `final_only` is true. Records saved in the older `rounds[{bids, tricks, deltas}]` format are upgraded when read.
 
 The server keeps one in-memory copy and writes through on every change, which assumes a single Render instance (the default). Do not scale the service to several instances.

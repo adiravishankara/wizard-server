@@ -88,10 +88,12 @@ Open **Leagues** in the top bar.
 
 - **Players** — leaderboard: games, wins (shared top scores count as ties), average and best score, and bid accuracy (rounds where tricks matched the bid) for every league player, on a team or not.
 - **Teams** — team standings from recorded results.
-- **Games** — every recorded result; open one for the winner, players, scores, bidding mode, rounds and the round-by-round breakdown. **Add result** enters a game played elsewhere; results can be edited or deleted.
+- **Games** — every recorded result; open one for the winner, players, scores, the points journey chart and the hand-by-hand table (trump, dealer, bid/tricks, points and running total). **Add result** enters a game played elsewhere, with final scores only or score by score for each hand; results can be edited or deleted.
 - **Roster** — add players and teams, move players between teams.
 
 In a game lobby, pick a league and each seat is matched to a league player by name (change any match from the list). Teams come from the league rosters, so it does not matter who sits where. At game over, the panel shows the team result and **Record to league** saves the full summary.
+
+The host (the player who created the game) can **Shuffle seats** in the lobby, or have seats shuffled when the game starts. At game over, **Rematch** opens a new lobby with the same bidding mode, league and teams; the others click **Join rematch**, and the seat order is shuffled at start unless the box is unticked.
 
 ## How friends join
 
