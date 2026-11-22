@@ -9,11 +9,12 @@ const S = {
   state: null,        // PlayerState from server
   ws: null,
   wsRetry: null,
-  draftTeams: [],     // lobby team editor: [{id, name, color, player_indices, league_team_id}]
-  draftLeagueId: null,
+  draftTeams: [],     // custom lobby teams when no league is linked: [{name, color, player_indices}]
+  leagues: [],
+  link: null,         // league link for the current game (seats -> league players)
+  teamScores: [],
   bidVal: 0,
   selected: null,     // hand index pending confirm
-  league: null,       // open league detail
 };
 
 /* ---------- helpers ---------- */
@@ -36,7 +37,8 @@ const gapi = (p, m, b) => api(API + p, m, b);
 const lapi = (p, m, b) => api(LAPI + p, m, b);
 
 function alertMsg(msg, ok = false) {
-  const el = $("game-alert");
+  const inGame = !$("game-screen").classList.contains("hidden") && !$("view-games").classList.contains("hidden");
+  const el = inGame ? $("game-alert") : $("toast");
   el.textContent = msg;
   el.classList.toggle("success", ok);
   el.classList.remove("hidden");
@@ -64,12 +66,15 @@ function removeSession(sess) {
 }
 
 /* ---------- navigation ---------- */
-function showView(which) {
+function showView(which, opts = {}) {
   $("view-games").classList.toggle("hidden", which !== "games");
   $("view-leagues").classList.toggle("hidden", which !== "leagues");
   $("nav-games").classList.toggle("active", which === "games");
   $("nav-leagues").classList.toggle("active", which === "leagues");
-  if (which === "leagues") loadLeaguesHome();
+  if (which === "leagues") {
+    if (opts.leagueId) openLeague(opts.leagueId, opts.tab);
+    else loadLeaguesHome();
+  }
 }
 $("nav-games").onclick = () => showView("games");
 $("nav-leagues").onclick = () => showView("leagues");
@@ -174,13 +179,14 @@ function enterGame(sess) {
   S.selected = null;
   saveSession(sess);
   S.draftTeams = [];
-  S.draftLeagueId = null;
+  S.link = null;
+  S.teamScores = [];
+  S.lastPhase = null;
   $("games-home").classList.add("hidden");
   $("game-screen").classList.remove("hidden");
   $("g-code").textContent = sess.game_id;
   connectWS();
-  loadGameTeams();
-  refreshLeagueSelects();
+  loadLeaguesList().then(loadGameLink);
 }
 
 $("btn-leave").onclick = () => {
@@ -622,6 +628,8 @@ function renderGame() {
   }
   const isLobby = st.phase === "lobby";
   const over = st.phase === "game_over";
+  if (over && S.lastPhase && S.lastPhase !== "game_over") loadLeaguesList().then(loadGameLink);
+  S.lastPhase = st.phase;
   $("g-round").classList.toggle("hidden", isLobby);
   trumpEl.classList.toggle("hidden", isLobby || over);
   $("btn-scores").classList.toggle("hidden", isLobby);
@@ -733,11 +741,101 @@ $("btn-ready").onclick = async () => {
   } catch (e) { alertMsg(e.message); }
 };
 
-/* ----- lobby + teams ----- */
+/* ----- lobby: league link + custom teams ----- */
 function renderLobby(st) {
   $("lobby-players").innerHTML = st.players.map((_, i) => playerBadge(st, i)).join("");
-  renderTeamEditor(st);
+  renderLeagueLink(st);
+  const linked = !!(S.link && S.link.league_id);
+  $("custom-teams").classList.toggle("hidden", linked);
+  if (!linked) renderTeamEditor(st);
 }
+
+const leagueById = (id) => (id ? S.leagues.find((l) => l.id === id) : null);
+const byName = (a, b) => a.name.localeCompare(b.name);
+
+function renderLeagueLink(st) {
+  const sel = $("link-league");
+  const cur = (S.link && S.link.league_id) || "";
+  sel.innerHTML = `<option value="">No league</option>` + S.leagues.map((l) =>
+    `<option value="${esc(l.id)}" ${l.id === cur ? "selected" : ""}>${esc(l.name)}</option>`).join("");
+  sel.value = leagueById(cur) ? cur : "";
+  const league = leagueById(cur);
+  if (league && S.link.seats.length !== st.players.length) loadGameLink();
+  if (!league) {
+    $("link-seats").innerHTML = "";
+    $("link-teams").innerHTML = "";
+    return;
+  }
+  const players = Object.values(league.players).sort(byName);
+  const teamOf = {};
+  Object.values(league.teams).forEach((t) => t.player_ids.forEach((pid) => { teamOf[pid] = t; }));
+  $("link-seats").innerHTML = S.link.seats.map((s) => {
+    const t = s.league_player_id && teamOf[s.league_player_id];
+    return `<div class="link-row" style="--tc:${esc(t ? t.color : "transparent")}">
+      ${avatarHTML(s.name)}
+      <span class="link-name">${esc(s.name)}</span>
+      <select data-link-seat="${s.seat}" aria-label="League player for ${esc(s.name)}">
+        <option value="">Guest</option>
+        ${players.map((p) => `<option value="${esc(p.id)}" ${p.id === s.league_player_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
+      </select>
+    </div>`;
+  }).join("");
+  $("link-seats").querySelectorAll("[data-link-seat]").forEach((el) => {
+    el.onchange = () => {
+      const seats = {};
+      $("link-seats").querySelectorAll("[data-link-seat]").forEach((x) => { seats[x.dataset.linkSeat] = x.value || null; });
+      saveLink(league.id, seats);
+    };
+  });
+  $("link-teams").innerHTML = S.link.teams.map((t) => `
+    <div class="link-team" style="--tc:${esc(t.color)}">
+      <span class="tchip"><i></i>${esc(t.name)}</span>
+      <span class="hint">${t.player_indices.map((i) => esc(st.players[i])).join(", ")}</span>
+    </div>`).join("");
+}
+
+async function loadLeaguesList() {
+  try { S.leagues = await lapi("/leagues"); } catch { S.leagues = []; }
+}
+
+async function loadGameLink() {
+  if (!S.session || loadGameLink.busy) return;
+  loadGameLink.busy = true;
+  const gid = S.session.game_id;
+  try {
+    const [link, teams] = await Promise.all([
+      lapi(`/games/${gid}/link`).catch(() => null),
+      lapi(`/games/${gid}/teams`).catch(() => []),
+    ]);
+    if (!S.session || S.session.game_id !== gid) return;
+    S.link = link;
+    if (!(link && link.league_id) && teams.length && !S.draftTeams.length) {
+      S.draftTeams = teams.map((t) => ({ ...t }));
+    }
+  } finally {
+    loadGameLink.busy = false;
+  }
+  if (S.state) renderGame();
+}
+
+async function saveLink(leagueId, seats) {
+  try {
+    S.link = await lapi(`/games/${S.session.game_id}/link`, "PUT", { league_id: leagueId || null, seats: seats || {} });
+  } catch (e) { alertMsg(e.message); }
+  if (S.state) renderGame();
+}
+
+$("link-league").onchange = async () => {
+  const lid = $("link-league").value;
+  if (!lid) return saveLink(null, {});
+  try {
+    await loadLeaguesList();
+    const sug = await lapi(`/games/${S.session.game_id}/link/suggest?league_id=${encodeURIComponent(lid)}`);
+    const seats = {};
+    sug.seats.forEach((s) => { seats[s.seat] = s.league_player_id; });
+    await saveLink(lid, seats);
+  } catch (e) { alertMsg(e.message); }
+};
 
 function renderTeamEditor(st) {
   const ed = $("team-editor");
@@ -747,8 +845,7 @@ function renderTeamEditor(st) {
   ed.innerHTML = S.draftTeams.map((t, ti) => `
     <div class="team-block">
       <div class="thead">
-        <span class="tname"><span class="team-dot" style="background:${esc(t.color)}"></span>${esc(t.name)}
-          ${t.league_team_id ? `<span class="hint">league team</span>` : ""}</span>
+        <span class="tname"><span class="team-dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</span>
         <button data-del-team="${ti}" class="ghost">✕</button>
       </div>
       <div>${t.player_indices.map((pi) =>
@@ -762,7 +859,7 @@ function renderTeamEditor(st) {
           </select>
           <button data-doassign="${ti}" class="ghost">Add</button>
         </div>` : ""}
-    </div>`).join("") || `<div class="empty">No teams yet — add one below or load from a league.</div>`;
+    </div>`).join("");
 
   ed.querySelectorAll("[data-del-team]").forEach((b) =>
     b.onclick = () => { S.draftTeams.splice(+b.dataset.delTeam, 1); renderTeamEditor(S.state); });
@@ -786,10 +883,7 @@ function renderTeamEditor(st) {
 $("btn-add-team").onclick = () => {
   const name = $("new-team-name").value.trim();
   if (!name) return alertMsg("Give the team a name.");
-  S.draftTeams.push({
-    name, color: $("new-team-color").value,
-    player_indices: [], league_team_id: null,
-  });
+  S.draftTeams.push({ name, color: $("new-team-color").value, player_indices: [] });
   $("new-team-name").value = "";
   renderTeamEditor(S.state);
 };
@@ -798,39 +892,12 @@ $("btn-save-teams").onclick = async () => {
   if (!S.draftTeams.length) return alertMsg("Add at least one team first.");
   try {
     await lapi(`/games/${S.session.game_id}/teams`, "POST", {
-      league_id: S.draftLeagueId,
-      teams: S.draftTeams.map((t) => ({
-        id: t.league_team_id || undefined,
-        name: t.name, color: t.color, player_indices: t.player_indices,
-      })),
+      teams: S.draftTeams.map((t) => ({ name: t.name, color: t.color, player_indices: t.player_indices })),
     });
     alertMsg("Teams saved.", true);
     refreshTeamScores();
   } catch (e) { alertMsg(e.message); }
 };
-
-$("btn-league-load").onclick = async () => {
-  const lid = $("league-load").value;
-  if (!lid) return;
-  try {
-    const league = await lapi(`/leagues/${lid}`);
-    S.draftLeagueId = lid;
-    S.draftTeams = Object.values(league.teams).map((t) => ({
-      name: t.name, color: t.color, player_indices: [], league_team_id: t.id,
-    }));
-    renderTeamEditor(S.state);
-  } catch (e) { alertMsg(e.message); }
-};
-
-async function loadGameTeams() {
-  try {
-    const teams = await lapi(`/games/${S.session.game_id}/teams`);
-    if (teams.length && !S.draftTeams.length) {
-      S.draftLeagueId = teams[0].league_id;
-      S.draftTeams = teams.map((t) => ({ ...t, league_team_id: t.league_team_id }));
-    }
-  } catch { /* no teams yet */ }
-}
 
 /* ----- scores ----- */
 function renderScores(st) {
@@ -891,6 +958,7 @@ async function refreshTeamScores() {
   clearTimeout(teamScoreTimer);
   try {
     const scores = await lapi(`/games/${S.session.game_id}/team-scores`);
+    S.teamScores = scores;
     $("teams-card").classList.toggle("hidden", !scores.length);
     $("team-scores").innerHTML = scores.map((t) => `
       <div class="score-row team-row" style="border-color:${esc(t.color)}">
@@ -898,210 +966,725 @@ async function refreshTeamScores() {
           <div class="meta">${t.player_names.map(esc).join(", ")}</div></div>
         <div><strong>${t.score}</strong></div>
       </div>`).join("");
-  } catch { /* teams endpoint may 404 before any assignment */ }
+    if (S.state && S.state.phase === "game_over") renderGameOver(S.state);
+  } catch { /* game may be gone */ }
   teamScoreTimer = setTimeout(refreshTeamScores, 8000);
 }
 
+/* ----- game over ----- */
 function renderGameOver(st) {
   const order = st.players.map((_, i) => i).sort((a, b) => st.scores[b] - st.scores[a]);
-  $("final-scores").innerHTML = order.map((i, r) =>
-    `<div class="score-row"><div>${r === 0 ? "🏆 " : ""}<strong>${esc(st.players[i])}</strong></div>
-     <div><strong>${st.scores[i]}</strong></div></div>`).join("");
-  const hasTeams = S.draftTeams.length > 0;
-  $("record-league").classList.toggle("hidden", !hasTeams);
-  if (hasTeams) refreshLeagueSelects();
+  const top = st.scores[order[0]];
+  const winners = order.filter((i) => st.scores[i] === top);
+  $("go-title").textContent = winners.length > 1
+    ? `Tie · ${winners.map((i) => st.players[i]).join(" & ")}`
+    : `${st.players[winners[0]]} wins`;
+  const rounds = (st.history || []).length;
+  $("go-sub").textContent = [plural(rounds, "round"), MODE_LABEL[st.bidding_mode]].filter(Boolean).join(" · ");
+
+  const ts = S.teamScores || [];
+  const teamOfSeat = {};
+  ts.forEach((t) => t.player_indices.forEach((i) => { teamOfSeat[i] = t; }));
+  $("final-scores").innerHTML = order.map((i) => {
+    const t = teamOfSeat[i];
+    const rank = order.findIndex((j) => st.scores[j] === st.scores[i]) + 1;
+    return `<div class="go-row ${winners.includes(i) ? "top" : ""} ${i === st.player_id ? "me" : ""}">
+      <span class="rank r${rank}">${rank}</span>
+      ${avatarHTML(st.players[i])}
+      <span class="go-name">${esc(st.players[i])}${t ? teamChip(t.name, t.color) : ""}</span>
+      <span class="go-score">${st.scores[i]}</span>
+    </div>`;
+  }).join("");
+
+  const goTeams = $("go-teams");
+  goTeams.classList.toggle("hidden", !ts.length);
+  if (ts.length) {
+    const best = Math.max(...ts.map((t) => t.score));
+    const nBest = ts.filter((t) => t.score === best).length;
+    goTeams.innerHTML = [...ts].sort((a, b) => b.score - a.score).map((t) => {
+      const win = t.score === best;
+      const badge = win ? (nBest > 1 ? `<span class="tie-badge">Tie</span>` : `<span class="win-badge">Winner</span>`) : "";
+      return `<div class="go-team ${win ? "win" : ""}" style="--tc:${esc(t.color)}">
+        <div class="go-team-top"><span class="tchip"><i></i>${esc(t.name)}</span>${badge}</div>
+        <div class="go-team-score">${t.score}</div>
+        <div class="hint">${t.player_names.map(esc).join(", ")}</div>
+      </div>`;
+    }).join("");
+  }
+  renderRecordBox();
 }
 
-async function refreshLeagueSelects() {
-  try {
-    const leagues = await lapi("/leagues");
-    const opts = leagues.map((l) =>
-      `<option value="${esc(l.id)}" ${l.id === S.draftLeagueId ? "selected" : ""}>${esc(l.name)}</option>`).join("");
-    $("league-load").innerHTML = `<option value="">Load teams from league…</option>` + opts;
-    $("record-league-select").innerHTML = `<option value="">Record to league…</option>` + opts;
-  } catch { /* leagues unavailable */ }
+function renderRecordBox() {
+  const link = S.link || {};
+  const recorded = !!link.recorded_record_id;
+  const linked = leagueById(link.league_id);
+  $("record-league").classList.toggle("hidden", !S.leagues.length && !recorded);
+  const sel = $("record-league-select");
+  sel.classList.toggle("hidden", !!linked || recorded);
+  if (!linked) {
+    const v = sel.value;
+    sel.innerHTML = `<option value="">Choose league…</option>` + S.leagues.map((l) =>
+      `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("");
+    sel.value = leagueById(v) ? v : "";
+  }
+  const btn = $("btn-record");
+  btn.disabled = recorded;
+  btn.textContent = recorded ? `Recorded${linked ? ` to ${linked.name}` : ""} ✓`
+    : linked ? `Record to ${linked.name}` : "Record result";
+  $("btn-view-standings").classList.toggle("hidden", !recorded);
 }
 
 $("btn-record").onclick = async () => {
-  const lid = $("record-league-select").value;
+  const lid = (S.link && S.link.league_id) || $("record-league-select").value;
   if (!lid) return alertMsg("Pick a league first.");
+  const btn = $("btn-record");
+  btn.disabled = true;
   try {
     const rec = await lapi(`/leagues/${lid}/record`, "POST", { game_id: S.session.game_id });
-    alertMsg(rec.winner_team_id ? "Result recorded!" : "Result recorded (tie — no winner).", true);
-  } catch (e) { alertMsg(e.message); }
+    S.link = { ...(S.link || { seats: [], teams: [] }), league_id: lid, recorded_record_id: rec.id };
+    alertMsg("Result recorded.", true);
+  } catch (e) {
+    alertMsg(e.message);
+  }
+  await loadLeaguesList();
+  await loadGameLink();
+  renderRecordBox();
 };
 
+$("btn-view-standings").onclick = () => {
+  const lid = S.link && S.link.league_id;
+  if (lid) showView("leagues", { leagueId: lid, tab: S.teamScores.length ? "teams" : "players" });
+};
+
+/* ---------- shared UI ---------- */
+const MODE_LABEL = { sequential: "Sequential", simultaneous: "Simultaneous", secret: "Blind", canadian: "Canadian" };
+const TEAM_COLORS = ["#7c4dff", "#e7a51b", "#2f9e6a", "#e0475b", "#2b8fd6", "#e8742c", "#c043b8", "#5a6b7d"];
+const plural = (n, word, many) => `${n} ${n === 1 ? word : (many || `${word}s`)}`;
+const fmtNum = (x) => (Number.isInteger(x) ? String(x) : x.toFixed(1));
+function fmtDate(iso, opts) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleDateString(undefined, opts || { month: "short", day: "numeric", year: "numeric" });
+}
+const isoDay = (iso) => {
+  const d = iso ? new Date(iso) : new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+const teamChip = (name, color) => `<span class="tchip" style="--tc:${esc(color)}"><i></i>${esc(name)}</span>`;
+const CROWN_ICON = `<svg class="crown-ic" viewBox="0 0 24 16" aria-hidden="true"><path d="M2 14 L4 4 L9 9 L12 2 L15 9 L20 4 L22 14 Z" fill="#f5c542" stroke="#8a6a12" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+function avatarStack(names, max = 5) {
+  const shown = names.slice(0, max).map((n) => avatarHTML(n)).join("");
+  const more = names.length > max ? `<span class="avatar more">+${names.length - max}</span>` : "";
+  return `<span class="av-stack">${shown}${more}</span>`;
+}
+const emptyState = (title, action = "") => `<div class="lg-empty"><div class="lg-empty-title">${esc(title)}</div>${action}</div>`;
+
+function openModal(html, cls = "") {
+  const m = $("modal");
+  m.className = `modal ${cls}`;
+  m.innerHTML = html;
+  $("modal-scrim").classList.remove("hidden");
+  m.querySelectorAll("[data-close]").forEach((b) => { b.onclick = closeModal; });
+  return m;
+}
+function closeModal() {
+  $("modal").classList.add("hidden");
+  $("modal-scrim").classList.add("hidden");
+  $("modal").innerHTML = "";
+}
+$("modal-scrim").onclick = closeModal;
+
+function confirmDialog({ title, body = "", confirmLabel = "Delete", danger = true }) {
+  return new Promise((resolve) => {
+    const el = $("confirm");
+    el.innerHTML = `
+      <h2>${esc(title)}</h2>
+      ${body ? `<p class="confirm-body">${esc(body)}</p>` : ""}
+      <div class="modal-actions">
+        <button type="button" class="ghost" data-answer="no">Cancel</button>
+        <button type="button" class="${danger ? "danger" : "primary"}" data-answer="yes">${esc(confirmLabel)}</button>
+      </div>`;
+    el.classList.remove("hidden");
+    $("confirm-scrim").classList.remove("hidden");
+    const done = (v) => {
+      el.classList.add("hidden");
+      $("confirm-scrim").classList.add("hidden");
+      document.removeEventListener("keydown", onKey, true);
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); done(false); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    $("confirm-scrim").onclick = () => done(false);
+    el.querySelector('[data-answer="no"]').onclick = () => done(false);
+    el.querySelector('[data-answer="yes"]').onclick = () => done(true);
+    el.querySelector('[data-answer="yes"]').focus();
+  });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("modal").classList.contains("hidden") && $("confirm").classList.contains("hidden")) closeModal();
+});
+
 /* ---------- leagues view ---------- */
+const LG = { league: null, board: [], standings: [], tab: "players", newTeamColor: null };
+
 async function loadLeaguesHome() {
   $("league-screen").classList.add("hidden");
   $("leagues-home").classList.remove("hidden");
+  const list = $("leagues-list");
   try {
     const leagues = await lapi("/leagues");
-    $("leagues-list").innerHTML = leagues.length ? leagues.map((l) => `
-      <div class="session-row">
-        <div><strong>${esc(l.name)}</strong>
-          <span class="hint">${Object.keys(l.teams).length} teams · ${Object.keys(l.players).length} players · ${l.games.length} games</span></div>
-        <div class="row" style="margin:0">
-          <button data-open-league="${esc(l.id)}">Open</button>
-          <button data-del-league="${esc(l.id)}" class="ghost">✕</button>
-        </div>
-      </div>`).join("")
-      : `<div class="empty">No leagues yet — create one.</div>`;
-    $("leagues-list").querySelectorAll("[data-open-league]").forEach((b) =>
-      b.onclick = () => openLeague(b.dataset.openLeague));
-    $("leagues-list").querySelectorAll("[data-del-league]").forEach((b) =>
-      b.onclick = async () => {
-        if (!confirm("Delete this league?")) return;
-        await lapi(`/leagues/${b.dataset.delLeague}`, "DELETE");
+    S.leagues = leagues;
+    $("leagues-summary").textContent = leagues.length ? plural(leagues.length, "league") : "";
+    if (!leagues.length) {
+      list.innerHTML = emptyState("No leagues yet");
+      return;
+    }
+    const boards = await Promise.all(leagues.map((l) => lapi(`/leagues/${l.id}/leaderboard`).catch(() => [])));
+    list.innerHTML = leagues.map((l, i) => leagueCardHTML(l, boards[i])).join("");
+    list.querySelectorAll("[data-open-league]").forEach((card) => {
+      card.onclick = () => openLeague(card.dataset.openLeague, "players");
+      card.onkeydown = (e) => { if (e.key === "Enter") openLeague(card.dataset.openLeague, "players"); };
+    });
+    list.querySelectorAll("[data-del-league]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const l = leagues.find((x) => x.id === b.dataset.delLeague);
+        const ok = await confirmDialog({
+          title: `Delete ${l.name}?`,
+          body: `Its ${plural(Object.keys(l.players).length, "player")}, ${plural(Object.keys(l.teams).length, "team")} and ${plural(l.games.length, "recorded game")} will be removed.`,
+          confirmLabel: "Delete league",
+        });
+        if (!ok) return;
+        try { await lapi(`/leagues/${l.id}`, "DELETE"); } catch (err) { alertMsg(err.message); }
         loadLeaguesHome();
-      });
-  } catch (e) { $("leagues-list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+      };
+    });
+  } catch (e) {
+    list.innerHTML = emptyState(e.message);
+  }
 }
 
-$("btn-create-league").onclick = async () => {
+function leagueCardHTML(l, board) {
+  const players = Object.values(l.players);
+  const teams = Object.values(l.teams);
+  const leader = board.find((r) => r.games_played > 0);
+  const last = l.games.length ? l.games.reduce((a, g) => (g.played_at > a ? g.played_at : a), "") : null;
+  return `<article class="lg-card" data-open-league="${esc(l.id)}" tabindex="0" role="button" aria-label="Open ${esc(l.name)}">
+    <div class="lg-card-bar">${teams.map((t) => `<span style="background:${esc(t.color)}"></span>`).join("")}</div>
+    <div class="lg-card-top">
+      <h2>${esc(l.name)}</h2>
+      <button type="button" class="ghost icon-btn lg-del" data-del-league="${esc(l.id)}" aria-label="Delete ${esc(l.name)}">✕</button>
+    </div>
+    <div class="lg-card-people">${players.length ? avatarStack(players.map((p) => p.name)) : ""}<span class="hint">${plural(players.length, "player")}</span></div>
+    <div class="lg-card-chips">
+      <span class="pill">${plural(teams.length, "team")}</span>
+      <span class="pill">${plural(l.games.length, "game")}</span>
+      ${last ? `<span class="pill">${fmtDate(last, { month: "short", day: "numeric" })}</span>` : ""}
+    </div>
+    <div class="lg-card-leader">${leader
+      ? `${CROWN_ICON}<strong>${esc(leader.name)}</strong><span class="hint">${plural(leader.wins, "win")}</span>`
+      : `<span class="hint">No games yet</span>`}</div>
+  </article>`;
+}
+
+$("league-create").onsubmit = async (e) => {
+  e.preventDefault();
   const name = $("league-name").value.trim();
   if (!name) return;
   try {
     const l = await lapi("/leagues", "POST", { name });
     $("league-name").value = "";
-    openLeague(l.id);
-  } catch (e) { alert(e.message); }
+    openLeague(l.id, "roster");
+  } catch (err) { alertMsg(err.message); }
 };
 
 $("btn-league-back").onclick = () => loadLeaguesHome();
+$("btn-add-result").onclick = () => openResultForm(null);
 
-async function openLeague(id) {
-  const league = await lapi(`/leagues/${id}`);
-  S.league = league;
+async function openLeague(id, tab) {
+  LG.tab = tab || "players";
   $("leagues-home").classList.add("hidden");
   $("league-screen").classList.remove("hidden");
-  $("league-title").textContent = league.name;
-  setLeagueTab("teams");
-  renderLeagueTeams();
+  try {
+    await refreshLeague(id);
+  } catch (e) {
+    alertMsg(e.message);
+    loadLeaguesHome();
+  }
 }
 
+async function refreshLeague(id = LG.league && LG.league.id) {
+  const [league, board, standings] = await Promise.all([
+    lapi(`/leagues/${id}`), lapi(`/leagues/${id}/leaderboard`), lapi(`/leagues/${id}/standings`),
+  ]);
+  Object.assign(LG, { league, board, standings });
+  const L = league;
+  $("league-title").textContent = L.name;
+  $("league-meta").textContent = [
+    plural(Object.keys(L.players).length, "player"),
+    plural(Object.keys(L.teams).length, "team"),
+    plural(L.games.length, "game"),
+  ].join(" · ");
+  setLeagueTab(LG.tab);
+}
+
+const LEAGUE_TABS = ["players", "teams", "games", "roster"];
 function setLeagueTab(which) {
-  ["teams", "standings", "games"].forEach((t) => {
+  LG.tab = which;
+  LEAGUE_TABS.forEach((t) => {
     $(`tab-${t}`).classList.toggle("active", t === which);
+    $(`tab-${t}`).setAttribute("aria-selected", t === which ? "true" : "false");
     $(`league-tab-${t}`).classList.toggle("hidden", t !== which);
   });
-  if (which === "standings") renderStandings();
-  if (which === "games") renderLeagueGames();
+  ({ players: renderPlayersTab, teams: renderTeamsTab, games: renderGamesTab, roster: renderRosterTab })[which]();
 }
-$("tab-teams").onclick = () => setLeagueTab("teams");
-$("tab-standings").onclick = () => setLeagueTab("standings");
-$("tab-games").onclick = () => setLeagueTab("games");
+LEAGUE_TABS.forEach((t) => { $(`tab-${t}`).onclick = () => setLeagueTab(t); });
 
-function renderLeagueTeams() {
-  const L = S.league;
-  const players = Object.values(L.players);
-  $("league-players").innerHTML = players.length ? players.map((p) =>
-    `<span class="chip">${esc(p.name)}<button data-del-p="${esc(p.id)}">✕</button></span>`).join("")
-    : `<div class="empty">No players yet.</div>`;
-  $("league-players").querySelectorAll("[data-del-p]").forEach((b) =>
-    b.onclick = async () => {
-      await lapi(`/leagues/${L.id}/players/${b.dataset.delP}`, "DELETE");
-      await refreshLeague();
-    });
-
-  const teams = Object.values(L.teams);
-  $("league-teams").innerHTML = teams.length ? teams.map((t) => {
-    const roster = t.player_ids.map((pid) => L.players[pid]).filter(Boolean);
-    const available = players.filter((p) => !t.player_ids.includes(p.id));
-    return `<div class="team-block">
-      <div class="thead">
-        <span class="tname"><span class="team-dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</span>
-        <button data-del-t="${esc(t.id)}" class="ghost">✕</button>
-      </div>
-      <div>${roster.map((p) =>
-        `<span class="chip">${esc(p.name)}<button data-rm="${esc(t.id)}:${esc(p.id)}">✕</button></span>`).join("")
-        || `<span class="hint">Empty roster</span>`}</div>
-      ${available.length ? `<div class="row">
-        <select id="add-${esc(t.id)}">
-          <option value="">Add player…</option>
-          ${available.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}
-        </select>
-        <button data-add="${esc(t.id)}" class="ghost">Add</button>
-      </div>` : ""}
-    </div>`;
-  }).join("") : `<div class="empty">No teams yet.</div>`;
-
-  $("league-teams").querySelectorAll("[data-del-t]").forEach((b) =>
-    b.onclick = async () => {
-      if (!confirm("Delete this team?")) return;
-      await lapi(`/leagues/${L.id}/teams/${b.dataset.delT}`, "DELETE");
-      await refreshLeague();
-    });
-  $("league-teams").querySelectorAll("[data-rm]").forEach((b) =>
-    b.onclick = async () => {
-      const [tid, pid] = b.dataset.rm.split(":");
-      await lapi(`/leagues/${L.id}/teams/${tid}/roster/${pid}`, "DELETE");
-      await refreshLeague();
-    });
-  $("league-teams").querySelectorAll("[data-add]").forEach((b) =>
-    b.onclick = async () => {
-      const sel = $(`add-${b.dataset.add}`);
-      if (!sel.value) return;
-      await lapi(`/leagues/${L.id}/teams/${b.dataset.add}/roster`, "POST", { player_id: sel.value });
-      await refreshLeague();
-    });
+function wireGoto(root) {
+  root.querySelectorAll("[data-goto]").forEach((b) => { b.onclick = () => setLeagueTab(b.dataset.goto); });
+  root.querySelectorAll("[data-add-result]").forEach((b) => { b.onclick = () => openResultForm(null); });
 }
 
-$("btn-add-league-player").onclick = async () => {
-  const name = $("league-player-name").value.trim();
-  if (!name || !S.league) return;
-  await lapi(`/leagues/${S.league.id}/players`, "POST", { name });
-  $("league-player-name").value = "";
-  await refreshLeague();
-};
-
-$("btn-add-league-team").onclick = async () => {
-  const name = $("league-team-name").value.trim();
-  if (!name || !S.league) return;
-  await lapi(`/leagues/${S.league.id}/teams`, "POST",
-    { name, color: $("league-team-color").value });
-  $("league-team-name").value = "";
-  await refreshLeague();
-};
-
-async function refreshLeague() {
-  S.league = await lapi(`/leagues/${S.league.id}`);
-  $("league-title").textContent = S.league.name;
-  renderLeagueTeams();
+const rankBadge = (rank) => `<span class="rank r${rank}">${rank}</span>`;
+function bidMeter(acc) {
+  if (acc == null) return `<span class="muted-dash">—</span>`;
+  const pct = Math.round(acc * 100);
+  return `<span class="meter"><span class="meter-fill" style="width:${pct}%"></span></span><span class="meter-val">${pct}%</span>`;
 }
 
-async function renderStandings() {
-  const el = $("standings-table");
-  try {
-    const rows = await lapi(`/leagues/${S.league.id}/standings`);
-    el.innerHTML = rows.length ? `
-      <table class="standings">
-        <tr><th>Team</th><th>Played</th><th>Wins</th><th>Total pts</th><th>Avg</th></tr>
-        ${rows.map((r, i) => `<tr>
-          <td>${i === 0 ? "🏆 " : ""}<span class="team-dot" style="background:${esc(r.color)}"></span>${esc(r.name)}</td>
-          <td>${r.games_played}</td><td>${r.wins}</td>
-          <td><strong>${r.total_points}</strong></td><td>${r.avg_points}</td>
-        </tr>`).join("")}
-      </table>`
-      : `<div class="empty">No games recorded yet.</div>`;
-  } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-}
-
-async function renderLeagueGames() {
-  const el = $("league-games");
-  try {
-    const games = await lapi(`/leagues/${S.league.id}/games`);
-    el.innerHTML = games.length ? games.map((g) => {
-      const scores = Object.entries(g.team_scores)
-        .map(([tid, pts]) => `${esc(g.team_names[tid] || tid)}: ${pts}`)
-        .join(" · ");
-      return `<div class="session-row">
-        <div><code>${esc(g.game_id)}</code>
-          <span class="hint">${scores}</span></div>
-        <span class="hint">${new Date(g.played_at).toLocaleDateString()}</span>
+function renderPlayersTab() {
+  const pane = $("league-tab-players");
+  const rows = LG.board;
+  if (!rows.length) {
+    pane.innerHTML = emptyState("No players yet", `<button class="primary" data-goto="roster">Add players</button>`);
+    return wireGoto(pane);
+  }
+  let rank = 0;
+  let prevKey = null;
+  pane.innerHTML = `<div class="lb lb-players">
+    <div class="lb-row lb-headrow"><span>#</span><span>Player</span><span>Games</span><span>Wins</span><span>Avg</span><span>Best</span><span>Bid accuracy</span></div>
+    ${rows.map((r, i) => {
+      const key = `${r.wins}|${r.ties}|${r.avg_score}`;
+      if (key !== prevKey) { rank = i + 1; prevKey = key; }
+      const played = r.games_played > 0;
+      return `<div class="lb-row ${played ? "" : "idle"}">
+        ${played ? rankBadge(rank) : `<span class="rank">–</span>`}
+        <span class="lb-who">${avatarHTML(r.name)}<span class="lb-name"><strong>${esc(r.name)}</strong>${r.team_name ? teamChip(r.team_name, r.team_color) : `<span class="tchip none">No team</span>`}</span></span>
+        <span class="lb-stat" data-label="Games">${r.games_played}</span>
+        <span class="lb-stat" data-label="Wins">${r.wins}${r.ties ? `<small>+${plural(r.ties, "tie")}</small>` : ""}</span>
+        <span class="lb-stat" data-label="Avg">${played ? fmtNum(r.avg_score) : "—"}</span>
+        <span class="lb-stat" data-label="Best">${r.best_score ?? "—"}</span>
+        <span class="lb-stat lb-bids" data-label="Accuracy">${bidMeter(r.bid_accuracy)}</span>
       </div>`;
-    }).join("") : `<div class="empty">No games recorded yet.</div>`;
-  } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    }).join("")}
+  </div>`;
+}
+
+function renderTeamsTab() {
+  const pane = $("league-tab-teams");
+  const L = LG.league;
+  const rows = LG.standings;
+  if (!rows.length) {
+    pane.innerHTML = emptyState("No teams yet", `<button class="primary" data-goto="roster">Create a team</button>`);
+    return wireGoto(pane);
+  }
+  pane.innerHTML = `<div class="lb lb-teams">
+    <div class="lb-row lb-headrow"><span>#</span><span>Team</span><span>Games</span><span>Wins</span><span>Points</span><span>Avg</span></div>
+    ${rows.map((r, i) => {
+      const names = r.player_ids.map((pid) => L.players[pid]).filter(Boolean).map((p) => p.name);
+      const played = r.games_played > 0;
+      return `<div class="lb-row team ${played ? "" : "idle"}" style="--tc:${esc(r.color)}">
+        ${played ? rankBadge(i + 1) : `<span class="rank">–</span>`}
+        <span class="lb-who"><span class="team-swatch"></span><span class="lb-name"><strong>${esc(r.name)}</strong>
+          <span class="lb-members">${names.length ? avatarStack(names, 4) : ""}<span class="hint">${plural(names.length, "player")}</span></span></span></span>
+        <span class="lb-stat" data-label="Games">${r.games_played}</span>
+        <span class="lb-stat" data-label="Wins">${r.wins}${r.ties ? `<small>+${plural(r.ties, "tie")}</small>` : ""}</span>
+        <span class="lb-stat" data-label="Points">${r.total_points}</span>
+        <span class="lb-stat" data-label="Avg">${played ? fmtNum(r.avg_points) : "—"}</span>
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+
+function winnerLine(g) {
+  if (!g.winner_names.length) return `<span class="hint">No scores</span>`;
+  return g.player_tie
+    ? `<span class="tie-badge">Tie</span><span>${g.winner_names.map(esc).join(" & ")}</span>`
+    : `${CROWN_ICON}<span>${esc(g.winner_names[0])}</span>`;
+}
+
+function gameMeta(g) {
+  return [
+    MODE_LABEL[g.bidding_mode],
+    g.rounds_played ? plural(g.rounds_played, "round") : null,
+    plural(g.players.length, "player"),
+    g.source === "manual" ? "Added by hand" : null,
+  ].filter(Boolean).join(" · ");
+}
+
+function teamResultChips(g) {
+  const ids = Object.keys(g.team_scores).sort((a, b) => g.team_scores[b] - g.team_scores[a]);
+  return ids.map((tid) => {
+    const win = g.winner_team_ids.includes(tid);
+    return `<span class="tscore ${win ? "win" : ""}" style="--tc:${esc(g.team_colors[tid] || "#888")}"><i></i>${esc(g.team_names[tid] || "Team")}<b>${g.team_scores[tid]}</b></span>`;
+  }).join("");
+}
+
+function renderGamesTab() {
+  const pane = $("league-tab-games");
+  const games = [...LG.league.games].sort((a, b) => (a.played_at < b.played_at ? 1 : -1));
+  if (!games.length) {
+    pane.innerHTML = emptyState("No games recorded yet", `<button class="primary" data-add-result>Add result</button>`);
+    return wireGoto(pane);
+  }
+  pane.innerHTML = `<div class="gm-list">${games.map((g) => {
+    const d = new Date(g.played_at);
+    return `<button type="button" class="gm-card" data-open-game="${esc(g.id)}">
+      <span class="gm-date"><b>${d.getDate()}</b><small>${d.toLocaleDateString(undefined, { month: "short" })}</small></span>
+      <span class="gm-main">
+        <span class="gm-winner">${winnerLine(g)}</span>
+        <span class="gm-meta">${esc(gameMeta(g))}</span>
+        <span class="gm-players">${avatarStack(g.players.map((p) => p.name), 6)}</span>
+      </span>
+      <span class="gm-teams">${teamResultChips(g)}</span>
+      <span class="gm-chev" aria-hidden="true">›</span>
+    </button>`;
+  }).join("")}</div>`;
+  pane.querySelectorAll("[data-open-game]").forEach((b) => { b.onclick = () => openGameDetail(b.dataset.openGame); });
+}
+
+function openGameDetail(rid) {
+  const L = LG.league;
+  const g = L.games.find((x) => x.id === rid);
+  if (!g) return;
+  const order = [...g.players].sort((a, b) => b.score - a.score);
+  const top = order.length ? order[0].score : null;
+  const rankOf = (p) => order.findIndex((q) => q.score === p.score) + 1;
+  const bySeat = [...g.players].sort((a, b) => (a.seat ?? 99) - (b.seat ?? 99));
+  const seatIdx = bySeat.map((p) => p.seat);
+  const rounds = g.rounds || [];
+  const roundTable = rounds.length && seatIdx.every((s) => s != null) ? `
+    <h3>Rounds</h3>
+    <div class="table-scroll"><table class="history">
+      <thead><tr><th>Rd</th>${bySeat.map((p) => `<th title="${esc(p.name)}">${esc(p.name.slice(0, 7))}</th>`).join("")}</tr></thead>
+      <tbody>${rounds.map((r) => `<tr><td class="rnd">${r.round}</td>${seatIdx.map((s) => {
+        const d = r.deltas[s];
+        return `<td><span class="d ${d >= 0 ? "pos" : "neg"}">${d > 0 ? "+" : ""}${d}</span><span class="bw">${r.tricks[s]}/${r.bids[String(s)] ?? "–"}</span></td>`;
+      }).join("")}</tr>`).join("")}
+      <tr><td class="rnd">Σ</td>${bySeat.map((p) => `<td><strong>${p.score}</strong></td>`).join("")}</tr></tbody>
+    </table></div>` : "";
+  const teamIds = Object.keys(g.team_scores).sort((a, b) => g.team_scores[b] - g.team_scores[a]);
+  const teams = teamIds.length ? `
+    <h3>Teams</h3>
+    <div class="gd-teams">${teamIds.map((tid) => {
+      const win = g.winner_team_ids.includes(tid);
+      const badge = win ? (g.team_tie ? `<span class="tie-badge">Tie</span>` : `<span class="win-badge">Winner</span>`) : "";
+      return `<div class="go-team ${win ? "win" : ""}" style="--tc:${esc(g.team_colors[tid] || "#888")}">
+        <div class="go-team-top"><span class="tchip"><i></i>${esc(g.team_names[tid] || "Team")}</span>${badge}</div>
+        <div class="go-team-score">${g.team_scores[tid]}</div>
+        <div class="hint">${g.players.filter((p) => p.team_id === tid).map((p) => esc(p.name)).join(", ")}</div>
+      </div>`;
+    }).join("")}</div>` : "";
+
+  const m = openModal(`
+    <div class="modal-head">
+      <div>
+        <div class="modal-kicker">${esc(fmtDate(g.played_at, { weekday: "short", month: "short", day: "numeric", year: "numeric" }))}</div>
+        <h2>${g.player_tie ? "Tie" : esc(g.winner_names[0] || "Game")}${g.player_tie ? "" : " wins"}</h2>
+      </div>
+      <button type="button" class="ghost icon-btn" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="gd-chips">
+      ${g.bidding_mode ? `<span class="pill">${MODE_LABEL[g.bidding_mode]}</span>` : ""}
+      ${g.rounds_played ? `<span class="pill">${plural(g.rounds_played, "round")}</span>` : ""}
+      <span class="pill">${g.source === "manual" ? "Added by hand" : "Played here"}</span>
+      ${g.edited_at ? `<span class="pill">Edited ${esc(fmtDate(g.edited_at, { month: "short", day: "numeric" }))}</span>` : ""}
+    </div>
+    <div class="gd-players">${order.map((p) => {
+      const r = rankOf(p);
+      const t = p.team_id && L.teams[p.team_id];
+      const tName = g.team_names[p.team_id] || (t && t.name);
+      const tColor = g.team_colors[p.team_id] || (t && t.color);
+      return `<div class="go-row ${p.score === top ? "top" : ""}">
+        ${rankBadge(r)}${avatarHTML(p.name)}
+        <span class="go-name">${esc(p.name)}${tName ? teamChip(tName, tColor) : ""}${p.league_player_id ? "" : `<span class="tchip none">Guest</span>`}</span>
+        ${p.rounds_bid ? `<span class="gd-bids" title="Bids made">${p.bids_made}/${p.rounds_bid}</span>` : ""}
+        <span class="go-score">${p.score}</span>
+      </div>`;
+    }).join("")}</div>
+    ${teams}
+    ${roundTable}
+    ${g.notes ? `<h3>Notes</h3><p class="gd-notes">${esc(g.notes)}</p>` : ""}
+    <div class="modal-actions split">
+      <button type="button" class="danger-ghost" data-act="delete">Delete</button>
+      <button type="button" class="primary" data-act="edit">Edit</button>
+    </div>`, "modal-wide");
+  m.querySelector('[data-act="edit"]').onclick = () => openResultForm(g);
+  m.querySelector('[data-act="delete"]').onclick = async () => {
+    const ok = await confirmDialog({
+      title: "Delete this game?",
+      body: `${fmtDate(g.played_at)} · ${g.player_tie ? "Tie" : `${g.winner_names[0]} won`}. Standings and the leaderboard will be recalculated.`,
+      confirmLabel: "Delete game",
+    });
+    if (!ok) return;
+    try {
+      await lapi(`/leagues/${L.id}/games/${g.id}`, "DELETE");
+      closeModal();
+      await refreshLeague();
+    } catch (e) { alertMsg(e.message); }
+  };
+}
+
+function openResultForm(rec) {
+  const L = LG.league;
+  if (!L) return;
+  const players = Object.values(L.players).sort(byName);
+  let lines = rec
+    ? rec.players.map((p) => {
+        const known = p.league_player_id && L.players[p.league_player_id];
+        return { pid: known ? p.league_player_id : "", name: known ? "" : p.name, score: p.score, bids: p.rounds_bid ? p.bids_made : "" };
+      })
+    : [0, 1, 2, 3].map(() => ({ pid: "", name: "", score: "", bids: "" }));
+
+  const m = openModal(`
+    <form id="result-form" class="rf" novalidate>
+      <div class="modal-head">
+        <h2>${rec ? "Edit result" : "Add result"}</h2>
+        <button type="button" class="ghost icon-btn" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="rf-grid">
+        <label>Date<input type="date" id="rf-date" value="${isoDay(rec && rec.played_at)}"></label>
+        <label>Bidding
+          <select id="rf-mode">
+            <option value="">—</option>
+            ${Object.entries(MODE_LABEL).map(([k, v]) => `<option value="${k}" ${rec && rec.bidding_mode === k ? "selected" : ""}>${v}</option>`).join("")}
+          </select>
+        </label>
+        <label>Rounds<input type="number" id="rf-rounds" min="0" max="20" inputmode="numeric" value="${rec ? rec.rounds_played || "" : ""}"></label>
+      </div>
+      <div class="rf-head"><span>Player</span><span>Score</span><span>Bids made</span><span></span></div>
+      <div id="rf-lines" class="rf-lines"></div>
+      <button type="button" id="rf-add-line" class="ghost rf-add">+ Player</button>
+      <label>Notes<textarea id="rf-notes" rows="2" maxlength="500">${esc(rec ? rec.notes : "")}</textarea></label>
+      <div id="rf-error" class="alert hidden"></div>
+      <div class="modal-actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button type="submit" class="primary">${rec ? "Save changes" : "Add result"}</button>
+      </div>
+    </form>`, "modal-wide");
+
+  const readLines = () => {
+    lines = [...m.querySelectorAll(".rf-line")].map((row) => ({
+      pid: row.querySelector("[data-f=pid]").value,
+      name: row.querySelector("[data-f=name]").value,
+      score: row.querySelector("[data-f=score]").value,
+      bids: row.querySelector("[data-f=bids]").value,
+    }));
+  };
+  const drawLines = () => {
+    m.querySelector("#rf-lines").innerHTML = lines.map((ln, i) => `
+      <div class="rf-line">
+        <div class="rf-who">
+          <select data-f="pid" aria-label="Player ${i + 1}">
+            <option value="">${ln.name ? "New player" : "Choose player…"}</option>
+            ${players.map((p) => `<option value="${esc(p.id)}" ${p.id === ln.pid ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
+            <option value="__new" ${!ln.pid && ln.name ? "selected" : ""}>New player…</option>
+          </select>
+          <input data-f="name" placeholder="Name" maxlength="32" value="${esc(ln.name)}" class="${!ln.pid && ln.name ? "" : "hidden"}" aria-label="New player name">
+        </div>
+        <input data-f="score" type="number" inputmode="numeric" step="10" value="${esc(ln.score)}" aria-label="Score" placeholder="0">
+        <input data-f="bids" type="number" inputmode="numeric" min="0" max="20" value="${esc(ln.bids)}" aria-label="Bids made" placeholder="—">
+        <button type="button" class="ghost icon-btn" data-rm-line="${i}" aria-label="Remove player" ${lines.length <= 3 ? "disabled" : ""}>✕</button>
+      </div>`).join("");
+    m.querySelectorAll("[data-f=pid]").forEach((sel) => {
+      sel.onchange = () => {
+        const name = sel.parentElement.querySelector("[data-f=name]");
+        name.classList.toggle("hidden", sel.value !== "__new");
+        if (sel.value === "__new") name.focus();
+        else name.value = "";
+      };
+    });
+    m.querySelectorAll("[data-rm-line]").forEach((b) => {
+      b.onclick = () => { readLines(); lines.splice(+b.dataset.rmLine, 1); drawLines(); };
+    });
+    m.querySelector("#rf-add-line").disabled = lines.length >= 6;
+  };
+  drawLines();
+  m.querySelector("#rf-add-line").onclick = () => {
+    readLines();
+    if (lines.length < 6) lines.push({ pid: "", name: "", score: "", bids: "" });
+    drawLines();
+  };
+
+  const showErr = (msg) => {
+    const el = m.querySelector("#rf-error");
+    el.textContent = msg;
+    el.classList.remove("hidden");
+  };
+  m.querySelector("#result-form").onsubmit = async (e) => {
+    e.preventDefault();
+    readLines();
+    const filled = lines.filter((ln) => ln.pid || ln.name.trim() || ln.score !== "");
+    if (filled.length < 3) return showErr("Enter at least 3 players.");
+    const out = [];
+    for (const ln of filled) {
+      const isNew = !ln.pid || ln.pid === "__new";
+      if (isNew && !ln.name.trim()) return showErr("Choose a player for every row.");
+      if (ln.score === "" || !Number.isFinite(Number(ln.score))) return showErr("Enter a score for every player.");
+      out.push({
+        league_player_id: isNew ? null : ln.pid,
+        name: isNew ? ln.name.trim() : null,
+        score: Math.round(Number(ln.score)),
+        bids_made: ln.bids === "" ? null : Math.round(Number(ln.bids)),
+      });
+    }
+    const body = {
+      played_at: m.querySelector("#rf-date").value || null,
+      bidding_mode: m.querySelector("#rf-mode").value || null,
+      rounds_played: Number(m.querySelector("#rf-rounds").value || 0),
+      players: out,
+      notes: m.querySelector("#rf-notes").value.trim(),
+    };
+    try {
+      const saved = rec
+        ? await lapi(`/leagues/${L.id}/games/${rec.id}`, "PUT", body)
+        : await lapi(`/leagues/${L.id}/games`, "POST", body);
+      closeModal();
+      LG.tab = "games";
+      await refreshLeague();
+      if (rec) openGameDetail(saved.id);
+    } catch (err) { showErr(err.message); }
+  };
+}
+
+function renderRosterTab() {
+  const pane = $("league-tab-roster");
+  const L = LG.league;
+  const players = Object.values(L.players).sort(byName);
+  const teams = Object.values(L.teams).sort(byName);
+  const teamOf = {};
+  teams.forEach((t) => t.player_ids.forEach((pid) => { teamOf[pid] = t; }));
+  const gp = {};
+  LG.board.forEach((r) => { gp[r.player_id] = r.games_played; });
+  const used = new Set(teams.map((t) => t.color.toLowerCase()));
+  if (!LG.newTeamColor || used.has(LG.newTeamColor)) {
+    LG.newTeamColor = TEAM_COLORS.find((c) => !used.has(c)) || TEAM_COLORS[0];
+  }
+
+  pane.innerHTML = `<div class="ro-grid">
+    <section class="card ro-card">
+      <div class="ro-head"><h2>Players</h2><span class="count">${players.length}</span></div>
+      <form id="form-add-player" class="inline-form">
+        <input id="league-player-name" placeholder="Player name" maxlength="32" aria-label="Player name">
+        <button type="submit" class="primary">Add</button>
+      </form>
+      <div class="ro-list">${players.length ? players.map((p) => {
+        const t = teamOf[p.id];
+        return `<div class="ro-row" style="--tc:${esc(t ? t.color : "transparent")}">
+          ${avatarHTML(p.name)}
+          <div class="ro-name"><strong>${esc(p.name)}</strong><span class="hint">${plural(gp[p.id] || 0, "game")}</span></div>
+          <select class="team-select" data-team-of="${esc(p.id)}" aria-label="Team for ${esc(p.name)}">
+            <option value="">No team</option>
+            ${teams.map((tm) => `<option value="${esc(tm.id)}" ${t && t.id === tm.id ? "selected" : ""}>${esc(tm.name)}</option>`).join("")}
+          </select>
+          <button type="button" class="ghost icon-btn" data-del-player="${esc(p.id)}" aria-label="Remove ${esc(p.name)}">✕</button>
+        </div>`;
+      }).join("") : `<div class="ro-none">No players yet</div>`}</div>
+    </section>
+    <section class="card ro-card">
+      <div class="ro-head"><h2>Teams</h2><span class="count">${teams.length}</span></div>
+      <form id="form-add-team" class="inline-form">
+        <input id="league-team-name" placeholder="Team name" maxlength="24" aria-label="Team name">
+        <button type="submit" class="primary">Add</button>
+      </form>
+      <div class="swatches" role="radiogroup" aria-label="Team colour">${TEAM_COLORS.map((c) =>
+        `<button type="button" class="swatch ${c === LG.newTeamColor ? "on" : ""}" style="--sw:${c}" data-swatch="${c}" aria-label="Colour ${c}" role="radio" aria-checked="${c === LG.newTeamColor}"></button>`).join("")}</div>
+      <div class="ro-teams">${teams.length ? teams.map((t) => {
+        const members = t.player_ids.map((pid) => L.players[pid]).filter(Boolean);
+        return `<div class="team-card" style="--tc:${esc(t.color)}">
+          <div class="team-card-head">
+            <span class="team-swatch"></span>
+            <strong>${esc(t.name)}</strong>
+            <span class="hint">${plural(members.length, "player")}</span>
+            <button type="button" class="ghost icon-btn" data-del-team="${esc(t.id)}" aria-label="Delete ${esc(t.name)}">✕</button>
+          </div>
+          <div class="team-card-members">${members.length ? members.map((p) =>
+            `<span class="mchip">${avatarHTML(p.name)}${esc(p.name)}</span>`).join("") : `<span class="hint">No players</span>`}</div>
+        </div>`;
+      }).join("") : `<div class="ro-none">No teams yet</div>`}</div>
+    </section>
+  </div>`;
+
+  pane.querySelector("#form-add-player").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $("league-player-name").value.trim();
+    if (!name) return;
+    try {
+      await lapi(`/leagues/${L.id}/players`, "POST", { name });
+      await refreshLeague();
+      $("league-player-name").focus();
+    } catch (err) { alertMsg(err.message); }
+  };
+  pane.querySelector("#form-add-team").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $("league-team-name").value.trim();
+    if (!name) return;
+    try {
+      await lapi(`/leagues/${L.id}/teams`, "POST", { name, color: LG.newTeamColor });
+      LG.newTeamColor = null;
+      await refreshLeague();
+    } catch (err) { alertMsg(err.message); }
+  };
+  pane.querySelectorAll("[data-swatch]").forEach((b) => {
+    b.onclick = () => {
+      LG.newTeamColor = b.dataset.swatch;
+      pane.querySelectorAll("[data-swatch]").forEach((x) => {
+        x.classList.toggle("on", x === b);
+        x.setAttribute("aria-checked", x === b ? "true" : "false");
+      });
+    };
+  });
+  pane.querySelectorAll("[data-team-of]").forEach((sel) => {
+    sel.onchange = async () => {
+      const pid = sel.dataset.teamOf;
+      const cur = teamOf[pid];
+      try {
+        if (sel.value) await lapi(`/leagues/${L.id}/teams/${sel.value}/roster`, "POST", { player_id: pid });
+        else if (cur) await lapi(`/leagues/${L.id}/teams/${cur.id}/roster/${pid}`, "DELETE");
+      } catch (err) { alertMsg(err.message); }
+      await refreshLeague();
+    };
+  });
+  pane.querySelectorAll("[data-del-player]").forEach((b) => {
+    b.onclick = async () => {
+      const p = L.players[b.dataset.delPlayer];
+      const n = gp[p.id] || 0;
+      const ok = await confirmDialog({
+        title: `Remove ${p.name}?`,
+        body: n ? `${p.name} stays in the ${plural(n, "recorded game")} but leaves the roster and leaderboard.` : "",
+        confirmLabel: "Remove",
+      });
+      if (!ok) return;
+      try { await lapi(`/leagues/${L.id}/players/${p.id}`, "DELETE"); } catch (err) { alertMsg(err.message); }
+      await refreshLeague();
+    };
+  });
+  pane.querySelectorAll("[data-del-team]").forEach((b) => {
+    b.onclick = async () => {
+      const t = L.teams[b.dataset.delTeam];
+      const ok = await confirmDialog({
+        title: `Delete ${t.name}?`,
+        body: t.player_ids.length ? `Its ${plural(t.player_ids.length, "player")} stay in the league without a team.` : "",
+        confirmLabel: "Delete team",
+      });
+      if (!ok) return;
+      try { await lapi(`/leagues/${L.id}/teams/${t.id}`, "DELETE"); } catch (err) { alertMsg(err.message); }
+      await refreshLeague();
+    };
+  });
 }
 
 /* ---------- init ---------- */

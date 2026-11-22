@@ -157,3 +157,15 @@ def test_unlinked_game_records_by_name_match(client):
     assert rec["players"][0]["name"] == "Ada"
     board = {r["name"]: r for r in client.get(f"{API}/leagues/{lid}/leaderboard").json()}
     assert board["Ada"]["games_played"] == 1 and "Stranger" not in board
+
+
+def test_league_ui_is_served_without_browser_dialogs(client):
+    html = client.get("/").text
+    for el in ("tab-players", "tab-teams", "tab-games", "tab-roster", "btn-add-result",
+               "link-league", "btn-record", "btn-view-standings", 'id="confirm"', 'id="modal"'):
+        assert el in html
+    res = client.get("/static/app.js")
+    assert res.status_code == 200
+    js = res.text
+    assert "confirm(" not in js.replace("confirmDialog(", "")
+    assert "alert(" not in js.replace("Alert(", "").replace("alertMsg(", "")
