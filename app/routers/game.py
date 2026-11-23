@@ -35,7 +35,8 @@ class RematchRequest(BaseModel):
 
 class LobbySettingsRequest(BaseModel):
     token: str
-    shuffle_on_start: bool
+    shuffle_on_start: Optional[bool] = None
+    bidding_mode: Optional[BiddingMode] = None
 
 
 class ActionRequest(BaseModel):
@@ -143,9 +144,18 @@ async def lobby_settings(game_id: str, request: LobbySettingsRequest):
     game = _game_or_404(game_id)
     if not is_host(game, request.token):
         raise HTTPException(status_code=403, detail="Only the host can change lobby settings")
-    get_meta(game_id).shuffle_on_start = request.shuffle_on_start
+    if phase_of(game) != "lobby":
+        raise HTTPException(status_code=400, detail="Lobby settings can only change before the game starts")
+    meta = get_meta(game_id)
+    if request.shuffle_on_start is not None:
+        meta.shuffle_on_start = request.shuffle_on_start
+    if request.bidding_mode is not None:
+        game.state.bidding_mode = request.bidding_mode
     await manager.broadcast_state(game_id, game)
-    return {"shuffle_on_start": request.shuffle_on_start}
+    return {
+        "shuffle_on_start": meta.shuffle_on_start,
+        "bidding_mode": getattr(game.state.bidding_mode, "value", game.state.bidding_mode),
+    }
 
 
 async def _join_rematch(old, new, token: str):

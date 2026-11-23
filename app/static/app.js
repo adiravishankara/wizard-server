@@ -252,6 +252,8 @@ const SUIT_SYM = { H: "♥", D: "♦", C: "♣", S: "♠" };
 const SUIT_NAME = { H: "Hearts", D: "Diamonds", C: "Clubs", S: "Spades" };
 const MAX_ROUNDS = { 3: 20, 4: 15, 5: 12, 6: 10 };
 const isRedSuit = (s) => s === "H" || s === "D";
+const suitClass = (s) => ({ H: "suit-h", D: "suit-d", C: "suit-c", S: "suit-s" }[s] || "");
+const SUIT_DESC = { H: "Crimson suit", D: "Royal blue suit", C: "Forest green suit", S: "Obsidian suit" };
 function rankLabel(r) {
   return r === 11 ? "J" : r === 12 ? "Q" : r === 13 ? "K" : r === 14 ? "A" : String(r);
 }
@@ -324,11 +326,11 @@ function cardHTML(card, opts = {}) {
       `<span class="pip${y > 50 ? " flip" : ""}" style="left:${x}%;top:${y}%">${s}</span>`).join("")}</div>`;
   }
   const idx = `<span class="r">${esc(r)}</span><span class="s">${s}</span>`;
-  return `<div class="pcard ${isRedSuit(card.suit) ? "red" : "black"} ${cls}"${style} ${attrs}>
+  return `<div class="pcard ${suitClass(card.suit) || (isRedSuit(card.suit) ? "red" : "black")} ${cls}"${style} ${attrs}>
     <div class="idx tl">${idx}</div>${face}<div class="idx br">${idx}</div></div>`;
 }
 function suitTileCard(suit, cls = "") {
-  return `<div class="pcard suit-tile-card ${isRedSuit(suit) ? "red" : "black"} ${cls}"><div class="ace">${SUIT_SYM[suit]}</div></div>`;
+  return `<div class="pcard suit-tile-card ${suitClass(suit)} ${cls}"><div class="ace">${SUIT_SYM[suit]}</div></div>`;
 }
 function cardName(c) {
   if (!c) return "";
@@ -474,7 +476,7 @@ function seatStat(st, i) {
 function trumpTileHTML(st) {
   if (st.phase === "waiting_trump") return `<div class="trump-tile none" title="Trump">?</div>`;
   if (st.trump_suit) {
-    return `<div class="trump-tile ${isRedSuit(st.trump_suit) ? "red" : ""}" title="Trump: ${SUIT_NAME[st.trump_suit]}">${SUIT_SYM[st.trump_suit]}</div>`;
+    return `<div class="trump-tile ${suitClass(st.trump_suit)}" title="Trump: ${SUIT_NAME[st.trump_suit]}">${SUIT_SYM[st.trump_suit]}</div>`;
   }
   return `<div class="trump-tile none" title="No trump">NO<br>TRUMP</div>`;
 }
@@ -515,7 +517,7 @@ function renderTrumpSpot(st) {
   let label;
   if (st.phase === "waiting_trump") label = "Wizard — choosing…";
   else if (st.trump_suit) {
-    label = `Trump <span class="${isRedSuit(st.trump_suit) ? "red" : ""}">${SUIT_SYM[st.trump_suit]}</span>`;
+    label = `Trump <span class="${suitClass(st.trump_suit)}">${SUIT_SYM[st.trump_suit]}</span>`;
   } else if (flip.kind === "jester") label = "Jester — no trump";
   else label = "No trump";
   el.innerHTML = `<div class="deck-row"><div class="deck">${cardHTML(null)}${cardHTML(null)}${cardHTML(null)}</div>${flipped}${chosen}</div>
@@ -631,12 +633,15 @@ function renderGame() {
   if (st.phase === "waiting_trump") {
     trumpEl.textContent = compact ? "Trump ?" : "Choosing trump";
     trumpEl.classList.remove("none");
+    trumpEl.removeAttribute("data-suit");
   } else if (st.trump_suit) {
-    trumpEl.innerHTML = `Trump <span class="${isRedSuit(st.trump_suit) ? "red" : ""}">${SUIT_SYM[st.trump_suit]}</span>`;
+    trumpEl.innerHTML = `Trump <span class="${suitClass(st.trump_suit)}">${SUIT_SYM[st.trump_suit]}</span>`;
     trumpEl.classList.remove("none");
+    trumpEl.dataset.suit = st.trump_suit;
   } else {
     trumpEl.textContent = "No trump";
     trumpEl.classList.add("none");
+    trumpEl.removeAttribute("data-suit");
   }
   const isLobby = st.phase === "lobby";
   const over = st.phase === "game_over";
@@ -658,19 +663,26 @@ function renderGame() {
     renderTrick(st, compact);
   }
 
+  if (!isLobby && !over) {
+    renderOppRail(st, compact);
+    renderLeadChip(st);
+    renderTurnBanner(st);
+  } else {
+    $("opp-rail").classList.add("hidden");
+    $("lead-chip").classList.add("hidden");
+    $("turn-banner").classList.add("hidden");
+    $("play-slot").classList.add("hidden");
+  }
+
   const myBid = bidRaw(st, me);
   const canBid = st.phase === "bidding" && myBid === undefined &&
     ((st.bidding_mode !== "sequential" && st.bidding_mode !== "canadian") || st.current_player === me);
-  $("bid-panel").classList.toggle("hidden", !canBid);
-  if (canBid) {
-    S.bidVal = Math.min(S.bidVal, st.current_round);
-    $("bid-value").textContent = S.bidVal;
-    $("bid-info").textContent = `Your bid (0–${st.current_round})`;
-    $("btn-bid").textContent = `Bid ${S.bidVal}`;
-  }
+  setSheet("bid", canBid);
+  if (canBid) renderBidSheet(st);
 
   const choosing = st.phase === "waiting_trump" && st.current_player === me;
-  $("trump-panel").classList.toggle("hidden", !choosing);
+  setSheet("trump", choosing);
+  if (choosing) renderTrumpSheet(st);
 
   const roundOver = st.phase === "round_over";
   $("roundover-panel").classList.toggle("hidden", !roundOver);
@@ -689,23 +701,30 @@ function renderGame() {
   const showHand = !isLobby && !over && st.hand.length > 0;
   $("hand-panel").classList.toggle("hidden", !showHand);
   hand.classList.toggle("my-turn", myTurn);
+  const slot = $("play-slot");
+  slot.classList.toggle("hidden", !myTurn);
+  slot.classList.toggle("active", myTurn && S.selected != null);
   hand.innerHTML = st.hand.map((c, i) => {
     const legal = myTurn && st.legal_moves.includes(i);
-    const cls = [!myTurn ? "" : (legal ? "legal" : "illegal"), S.selected === i ? "selected" : ""].join(" ");
+    const cls = [
+      !myTurn ? "" : (legal ? "legal" : "illegal"),
+      S.selected === i ? "lifted selected" : "",
+    ].join(" ");
     return cardHTML(c, { cls, attrs: `data-card="${i}" title="${cardName(c)}"` });
   }).join("");
   layoutFan(hand);
-  hand.querySelectorAll("[data-card]").forEach((el) => {
-    el.onclick = () => {
-      const i = parseInt(el.dataset.card, 10);
-      if (!(myTurn && st.legal_moves.includes(i))) return;
-      S.selected = S.selected === i ? null : i;
-      renderGame();
-    };
-  });
+  bindHandGestures(hand, myTurn);
   const playBtn = $("btn-play");
-  playBtn.classList.toggle("hidden", !(myTurn && S.selected != null));
+  playBtn.classList.toggle("hidden", !(myTurn && S.selected != null) || isCompact());
   playBtn.textContent = S.selected != null ? `Play ${cardName(st.hand[S.selected])}` : "Play card";
+  const you = $("you-chip");
+  const showYou = showHand && !isLobby && !(st.phase === "playing" && st.current_player === me && !st.trick_complete);
+  you.classList.toggle("hidden", !showYou);
+  if (showYou) {
+    const raw = bidRaw(st, me);
+    const won = st.trick_wins[me] ?? 0;
+    you.textContent = `You ${typeof raw === "number" ? `${won}/${raw}` : won}`;
+  }
 
   $("gameover-panel").classList.toggle("hidden", !over);
   if (over) renderGameOver(st);
@@ -733,14 +752,12 @@ function setBid(v) {
   const max = S.state ? S.state.current_round : 0;
   S.bidVal = Math.max(0, Math.min(max, v));
   $("bid-value").textContent = S.bidVal;
-  $("btn-bid").textContent = `Bid ${S.bidVal}`;
+  $("btn-bid").textContent = `Lock bid ${S.bidVal}`;
+  $("bid-nums")?.querySelectorAll(".bid-num").forEach((b) => {
+    b.classList.toggle("selected", +b.dataset.bid === S.bidVal);
+  });
 }
-$("bid-minus").onclick = () => setBid(S.bidVal - 1);
-$("bid-plus").onclick = () => setBid(S.bidVal + 1);
 $("btn-bid").onclick = () => doAction({ action: "bid", value: S.bidVal }).then(() => { S.bidVal = 0; });
-
-document.querySelectorAll(".suit-picker .suit").forEach((b) =>
-  b.onclick = () => doAction({ action: "choose_trump", value: 0, suit: b.dataset.suit }));
 
 $("btn-shuffle").onclick = async () => {
   const btn = $("btn-shuffle");
@@ -770,6 +787,189 @@ $("btn-ready").onclick = async () => {
 };
 
 /* ----- lobby: league link + custom teams ----- */
+function setSheet(kind, open) {
+  $(`${kind}-panel`).classList.toggle("hidden", !open);
+  $(`${kind}-scrim`)?.classList.toggle("hidden", !open);
+  document.body.classList.toggle(`sheet-open-${kind}`, open);
+}
+
+function renderBidSheet(st) {
+  const max = st.current_round;
+  S.bidVal = Math.min(S.bidVal, max);
+  const placed = Object.values(st.bids || {}).filter((b) => typeof b === "number");
+  const total = placed.reduce((a, b) => a + b, 0);
+  const open = st.bidding_mode !== "secret";
+  $("bid-info").textContent = `0–${max} tricks`;
+  $("bid-total").innerHTML = `<span class="bt-label">Total bids</span>
+    <span class="bt-val ${total > max ? "over" : ""}">${open ? total : "?"} <span style="font-size:14px;font-weight:700;color:var(--muted)">/ ${max}</span></span>`;
+  $("bid-others").innerHTML = st.players.map((name, i) => {
+    if (i === st.player_id) return "";
+    const raw = bidRaw(st, i);
+    const pending = raw === undefined;
+    const shown = pending ? "…" : (raw === null || !open ? "✓" : raw);
+    return `<div class="bid-other ${pending ? "pending" : ""}"><span class="bo-name">${esc(name)}</span><span class="bo-bid">${shown}</span></div>`;
+  }).join("");
+  $("bid-nums").innerHTML = Array.from({ length: max + 1 }, (_, v) =>
+    `<button type="button" class="bid-num ${v === S.bidVal ? "selected" : ""}" data-bid="${v}">${v}</button>`).join("");
+  $("bid-nums").querySelectorAll(".bid-num").forEach((b) => {
+    b.onclick = () => setBid(+b.dataset.bid);
+  });
+  $("btn-bid").textContent = `Lock bid ${S.bidVal}`;
+}
+
+function renderTrumpSheet(st) {
+  const flip = (st.flip && st.flip.card) || { type: "wizard" };
+  $("trump-hero").innerHTML = `${cardHTML(flip, { cls: "flip-big" })}
+    <p class="trump-hero-kicker">Round ${st.current_round} · Wizard flipped</p>
+    <h2 class="trump-hero-title">Choose trump suit</h2>`;
+  $("trump-actions").innerHTML = ["H", "D", "C", "S"].map((suit) => `
+    <button type="button" class="suit-row ${suitClass(suit)}" data-suit="${suit}">
+      <span class="sr-icon">${SUIT_SYM[suit]}</span>
+      <span><span class="sr-name">${SUIT_NAME[suit]}</span><span class="sr-desc">${SUIT_DESC[suit]}</span></span>
+      <span class="sr-go" aria-hidden="true">›</span>
+    </button>`).join("");
+  $("trump-actions").querySelectorAll("[data-suit]").forEach((b) => {
+    b.onclick = () => doAction({ action: "choose_trump", value: 0, suit: b.dataset.suit });
+  });
+}
+
+function renderOppRail(st, compact) {
+  const rail = $("opp-rail");
+  if (!compact) { rail.classList.add("hidden"); rail.innerHTML = ""; return; }
+  rail.classList.remove("hidden");
+  const n = st.players.length;
+  rail.innerHTML = st.players.map((name, i) => {
+    if (i === st.player_id) return "";
+    const raw = bidRaw(st, i);
+    let stat = "–";
+    let cls = "";
+    if (st.phase === "bidding") {
+      if (raw === undefined) stat = "…";
+      else if (raw === null) stat = "✓";
+      else stat = String(raw);
+    } else if (st.phase !== "waiting_trump" && st.phase !== "lobby") {
+      const won = st.trick_wins[i] ?? 0;
+      const bid = typeof raw === "number" ? raw : "?";
+      stat = `${won}/${bid}`;
+      if (typeof raw === "number") cls = won === raw ? "made" : (won > raw ? "over" : "");
+    }
+    const classes = ["opp-pill", isTurn(st, i) ? "turn" : "", trickWinner(st) === i ? "won" : ""];
+    return `<div class="${classes.join(" ")}" data-seat="${i}">
+      <div class="avatar-wrap">${isLeader(st, i) ? CROWN_SVG : ""}${avatarHTML(name)}${
+        i === st.dealer_idx ? `<span class="dealer-chip" title="Dealer">D</span>` : ""}</div>
+      <span class="opp-name">${esc(name)}</span>
+      <span class="opp-stat ${cls}">${stat}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderLeadChip(st) {
+  const el = $("lead-chip");
+  const trick = st.current_trick || [];
+  if (st.phase !== "playing" || !trick.length) { el.classList.add("hidden"); return; }
+  const lead = trick[0][1];
+  if (lead.type !== "regular" || !lead.suit) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `Lead: <span class="${suitClass(lead.suit)}">${SUIT_SYM[lead.suit]} ${SUIT_NAME[lead.suit]}</span>`;
+}
+
+function renderTurnBanner(st) {
+  const el = $("turn-banner");
+  const me = st.player_id;
+  const myTurn = st.phase === "playing" && st.current_player === me && !st.trick_complete;
+  if (!myTurn) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const trick = st.current_trick || [];
+  const lead = trick[0] && trick[0][1];
+  let msg = "Your turn";
+  if (lead && lead.type === "regular" && lead.suit) {
+    msg = `Your turn — follow ${SUIT_SYM[lead.suit]}`;
+  } else if (!trick.length) {
+    msg = "Your lead";
+  }
+  const raw = bidRaw(st, me);
+  const won = st.trick_wins[me] ?? 0;
+  el.classList.remove("hidden");
+  el.innerHTML = `<span class="tb-main">${esc(msg)}</span>
+    <span class="tb-you">You ${typeof raw === "number" ? `${won}/${raw}` : won}</span>`;
+}
+
+function bindHandGestures(hand, myTurn) {
+  if (S._handCtl) S._handCtl.abort();
+  S._handCtl = new AbortController();
+  const signal = S._handCtl.signal;
+  hand.querySelectorAll("[data-card]").forEach((el) => {
+    const i = parseInt(el.dataset.card, 10);
+    el.addEventListener("click", () => {
+      if (S._dragPlayed) { S._dragPlayed = false; return; }
+      if (!(myTurn && S.state.legal_moves.includes(i))) return;
+      if (S.selected === i) { S.selected = null; playCard(i); return; }
+      S.selected = i;
+      renderGame();
+    }, { signal });
+    if (!(myTurn && S.state.legal_moves.includes(i))) return;
+    let startY = 0, startX = 0, dragging = false, ghost = null;
+    const onDown = (ev) => {
+      const pt = ev.touches ? ev.touches[0] : ev;
+      startY = pt.clientY; startX = pt.clientX; dragging = false;
+      S._dragCard = i;
+    };
+    const onMove = (ev) => {
+      if (S._dragCard !== i) return;
+      const pt = ev.touches ? ev.touches[0] : ev;
+      const dy = startY - pt.clientY;
+      const dx = Math.abs(pt.clientX - startX);
+      if (!dragging && dy > 18 && dy > dx) {
+        dragging = true;
+        S.selected = i;
+        el.classList.add("dragging");
+        ghost = el.cloneNode(true);
+        ghost.classList.add("ghost-drag");
+        ghost.classList.remove("dragging", "lifted");
+        ghost.style.width = `${el.offsetWidth}px`;
+        ghost.style.height = `${el.offsetHeight}px`;
+        document.body.appendChild(ghost);
+        $("play-slot").classList.add("drag-over");
+      }
+      if (dragging && ghost) {
+        if (ev.cancelable) ev.preventDefault();
+        ghost.style.left = `${pt.clientX}px`;
+        ghost.style.top = `${pt.clientY}px`;
+        const slot = $("play-slot").getBoundingClientRect();
+        const over = pt.clientX >= slot.left - 20 && pt.clientX <= slot.right + 20
+          && pt.clientY >= slot.top - 40 && pt.clientY <= slot.bottom + 20;
+        $("play-slot").classList.toggle("drag-over", over);
+      }
+    };
+    const onUp = (ev) => {
+      if (S._dragCard !== i) return;
+      S._dragCard = null;
+      const pt = ev.changedTouches ? ev.changedTouches[0] : ev;
+      const dy = startY - (pt ? pt.clientY : startY);
+      let played = false;
+      if (dragging && pt) {
+        const slot = $("play-slot").getBoundingClientRect();
+        const over = pt.clientX >= slot.left - 20 && pt.clientX <= slot.right + 20
+          && pt.clientY >= slot.top - 40 && pt.clientY <= slot.bottom + 20;
+        if (over || dy > 90) {
+          S.selected = null; playCard(i); played = true; S._dragPlayed = true;
+        }
+      } else if (!dragging && dy > 100) {
+        S.selected = null; playCard(i); played = true; S._dragPlayed = true;
+      }
+      if (ghost) ghost.remove();
+      el.classList.remove("dragging");
+      $("play-slot").classList.remove("drag-over");
+      if (!played && dragging) renderGame();
+    };
+    el.addEventListener("pointerdown", onDown, { signal });
+    window.addEventListener("pointermove", onMove, { signal });
+    window.addEventListener("pointerup", onUp, { signal });
+    el.addEventListener("touchstart", onDown, { signal, passive: true });
+    window.addEventListener("touchmove", onMove, { signal, passive: false });
+    window.addEventListener("touchend", onUp, { signal });
+  });
+}
+
 function lobbyMoves(st) {
   const gid = S.session.game_id;
   const prev = S.lobbyOrder;
@@ -791,12 +991,32 @@ function lobbyMoves(st) {
 function renderLobby(st) {
   const moved = lobbyMoves(st);
   const isHost = st.host === st.player_id || st.host == null;
+  $("lobby-code").textContent = S.session.game_id;
   $("lobby-players").innerHTML = st.players.map((n, i) => lobbySeat(st, i, moved.has(n))).join("");
   const tags = [];
   if (st.rematch_of) tags.push(`<span class="pill">Rematch</span>`);
-  if (st.seats_shuffled) tags.push(`<span class="pill pill-accent">🔀 Seats shuffled</span>`);
+  if (st.seats_shuffled) tags.push(`<span class="pill pill-accent">Seats shuffled</span>`);
   if (st.shuffle_on_start && !isHost) tags.push(`<span class="pill">Shuffle at start</span>`);
   $("lobby-tags").innerHTML = tags.join("");
+  const modes = [
+    ["sequential", "Sequential", "Normal turn order"],
+    ["simultaneous", "Simultaneous", "Everyone bids at once"],
+    ["secret", "Blind", "Bids hidden until the hand ends"],
+    ["canadian", "Canadian", "Last bidder can't even the total"],
+  ];
+  $("lobby-mode").innerHTML = modes.map(([k, title, sub]) => `
+    <button type="button" class="mode-tile ${st.bidding_mode === k ? "selected" : ""}" data-mode="${k}" ${isHost ? "" : "disabled"}>
+      <strong>${title}</strong><span>${sub}</span>
+    </button>`).join("");
+  $("lobby-mode").querySelectorAll("[data-mode]").forEach((b) => {
+    b.onclick = async () => {
+      if (!isHost || b.dataset.mode === st.bidding_mode) return;
+      try {
+        await gapi(`/${S.session.game_id}/lobby-settings`, "POST",
+          { token: S.session.token, bidding_mode: b.dataset.mode });
+      } catch (e) { alertMsg(e.message); }
+    };
+  });
   const waiting = st.waiting_for || [];
   $("lobby-waiting").classList.toggle("hidden", !waiting.length);
   $("lobby-waiting").innerHTML = `<span class="hint">Waiting for</span>${waiting.map((n) =>
@@ -1002,6 +1222,12 @@ $("btn-scores").onclick = () => openScores($("score-drawer").classList.contains(
 $("btn-scores-close").onclick = () => openScores(false);
 $("drawer-scrim").onclick = () => openScores(false);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") openScores(false); });
+$("btn-copy-code").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(S.session.game_id);
+    alertMsg("Code copied", true);
+  } catch { alertMsg("Could not copy"); }
+};
 $("g-room").onclick = async () => {
   if (!S.session) return;
   try {

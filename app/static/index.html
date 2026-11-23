@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Wizard — Card Game</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650;9..144,700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/styles.css">
 <script>
 (function () {
@@ -75,15 +78,23 @@
       <div id="game-alert" class="alert hidden"></div>
       <p id="status-line" class="status-line"></p>
 
-      <div id="lobby-panel" class="card hidden">
+      <div id="lobby-panel" class="card lobby-card hidden">
         <div class="lobby-head">
           <h2>Lobby</h2>
           <div id="lobby-tags" class="lobby-tags"></div>
         </div>
+        <div class="lobby-code-row">
+          <div class="lobby-code-block">
+            <span class="lobby-code-label">Room code</span>
+            <span class="lobby-code" id="lobby-code"></span>
+          </div>
+          <button id="btn-copy-code" class="ghost" type="button">Copy</button>
+        </div>
+        <div id="lobby-mode" class="mode-grid" role="group" aria-label="Bidding mode"></div>
         <div id="lobby-players" class="player-list seat-list"></div>
         <div id="lobby-waiting" class="lobby-waiting hidden"></div>
         <div id="lobby-tools" class="lobby-tools hidden">
-          <button id="btn-shuffle" class="ghost" type="button"><span aria-hidden="true">🔀</span> Shuffle seats</button>
+          <button id="btn-shuffle" class="ghost" type="button">Shuffle seats</button>
           <label class="check-toggle"><input type="checkbox" id="shuffle-on-start"><span>Shuffle at start</span></label>
         </div>
         <button id="btn-start" class="primary">Start game</button>
@@ -98,7 +109,7 @@
           <div id="team-editor"></div>
           <div class="row">
             <input id="new-team-name" placeholder="Team name" maxlength="24">
-            <input id="new-team-color" type="color" value="#4f8cff">
+            <input id="new-team-color" type="color" value="#5B4FE8">
             <button id="btn-add-team" class="ghost">Add team</button>
           </div>
           <button id="btn-save-teams" class="primary">Save teams</button>
@@ -106,34 +117,43 @@
       </div>
 
       <div id="table-panel" class="table-wrap">
+        <div id="opp-rail" class="opp-rail hidden" aria-label="Opponents"></div>
         <div id="table" class="table">
           <div class="felt"></div>
+          <div id="lead-chip" class="lead-chip hidden"></div>
           <div id="trump-spot" class="trump-spot"></div>
           <div id="table-center" class="table-center"></div>
+          <div id="play-slot" class="play-slot hidden" aria-hidden="true"><span>Play here</span></div>
           <div id="trick-area" class="trick-zone"></div>
           <div id="trick-ghosts" class="trick-zone ghosts" aria-hidden="true"></div>
           <div id="seats"></div>
         </div>
       </div>
 
-      <div id="bid-panel" class="action-bar hidden">
-        <span id="bid-info" class="action-label"></span>
-        <div class="bid-controls">
-          <button id="bid-minus" class="bid-step" type="button" aria-label="Lower bid">−</button>
-          <span id="bid-value">0</span>
-          <button id="bid-plus" class="bid-step" type="button" aria-label="Raise bid">+</button>
+      <div id="turn-banner" class="turn-banner hidden" role="status"></div>
+
+      <div id="bid-scrim" class="sheet-scrim hidden"></div>
+      <div id="bid-panel" class="sheet bid-sheet hidden" role="dialog" aria-label="Place your bid">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="sheet-head">
+          <div>
+            <h2 class="sheet-title">Place your bid</h2>
+            <p id="bid-info" class="sheet-sub"></p>
+          </div>
+          <div id="bid-total" class="bid-total" aria-live="polite"></div>
         </div>
-        <button id="btn-bid" class="primary bid-go" type="button">Bid</button>
+        <div id="bid-others" class="bid-others"></div>
+        <div class="bid-select-label">Select bid</div>
+        <div id="bid-nums" class="bid-nums"></div>
+        <button id="btn-bid" class="primary bid-lock" type="button">Lock bid</button>
+        <span id="bid-value" class="hidden">0</span>
       </div>
 
-      <div id="trump-panel" class="action-bar trump-bar hidden">
-        <span class="action-label">Choose trump</span>
-        <div id="trump-actions" class="suit-picker">
-          <button data-suit="H" class="suit red" type="button"><span class="suit-sym">♥</span><span class="suit-name">Hearts</span></button>
-          <button data-suit="D" class="suit red" type="button"><span class="suit-sym">♦</span><span class="suit-name">Diamonds</span></button>
-          <button data-suit="C" class="suit" type="button"><span class="suit-sym">♣</span><span class="suit-name">Clubs</span></button>
-          <button data-suit="S" class="suit" type="button"><span class="suit-sym">♠</span><span class="suit-name">Spades</span></button>
-        </div>
+      <div id="trump-scrim" class="sheet-scrim hidden"></div>
+      <div id="trump-panel" class="sheet trump-sheet hidden" role="dialog" aria-label="Choose trump">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div id="trump-hero" class="trump-hero"></div>
+        <div id="trump-actions" class="suit-rows"></div>
       </div>
 
       <div id="roundover-panel" class="action-bar hidden">
@@ -142,6 +162,7 @@
       </div>
 
       <div id="hand-panel" class="hand-dock">
+        <div id="you-chip" class="you-chip hidden"></div>
         <div id="hand" class="hand"></div>
         <button id="btn-play" class="primary play-confirm hidden" type="button">Play card</button>
       </div>
