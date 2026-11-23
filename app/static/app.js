@@ -204,6 +204,7 @@ $("btn-leave").onclick = () => {
   S.trickKeys = null;
   openScores(false);
   try { sessionStorage.removeItem("wizard_active"); } catch { /* ignore */ }
+  document.body.classList.remove("bidding", "sheet-open-trump", "sheet-open-bid");
   $("game-screen").classList.add("hidden");
   $("games-home").classList.remove("hidden");
   renderSessions();
@@ -343,17 +344,22 @@ function layoutFan(container) {
   const cards = [...container.querySelectorAll(".pcard")];
   const n = cards.length;
   if (!n) return;
-  const maxW = (container.clientWidth || 360) - 30;
-  const w = cards[0].offsetWidth || 90;
-  const step = n === 1 ? 0 : Math.min(w * 0.64, (maxW - w) / (n - 1));
+  const maxW = (container.clientWidth || 360) - 16;
+  // Keep a readable hand when there are many cards (late rounds).
+  const base = Math.min(96, Math.max(52, Math.floor(maxW / Math.max(4.2, n * 0.55))));
+  cards.forEach((el) => { el.style.setProperty("--cw", `${base}px`); });
+  const w = base;
+  const step = n === 1 ? 0 : Math.min(w * 0.62, (maxW - w) / (n - 1));
   const mid = (n - 1) / 2;
-  const spread = Math.min(3.4, 28 / n);
+  const flat = container.classList.contains("view-only");
+  const spread = flat ? Math.min(1.6, 14 / n) : Math.min(3.2, 26 / n);
+  const lift = flat ? 0.15 : 0.4;
   cards.forEach((el, i) => {
     const d = i - mid;
     el.style.marginLeft = i === 0 ? "0px" : `${(step - w).toFixed(1)}px`;
     el.style.zIndex = String(i + 1);
     el.style.setProperty("--fr", `${(d * spread).toFixed(2)}deg`);
-    el.style.setProperty("--fy", `${(d * d * spread * 0.45).toFixed(1)}px`);
+    el.style.setProperty("--fy", `${(d * d * spread * lift).toFixed(1)}px`);
   });
 }
 
@@ -677,8 +683,9 @@ function renderGame() {
   const myBid = bidRaw(st, me);
   const canBid = st.phase === "bidding" && myBid === undefined &&
     ((st.bidding_mode !== "sequential" && st.bidding_mode !== "canadian") || st.current_player === me);
-  setSheet("bid", canBid);
-  if (canBid) renderBidSheet(st);
+  $("bid-panel").classList.toggle("hidden", !canBid);
+  document.body.classList.toggle("bidding", canBid);
+  if (canBid) renderBidBar(st);
 
   const choosing = st.phase === "waiting_trump" && st.current_player === me;
   setSheet("trump", choosing);
@@ -701,6 +708,7 @@ function renderGame() {
   const showHand = !isLobby && !over && st.hand.length > 0;
   $("hand-panel").classList.toggle("hidden", !showHand);
   hand.classList.toggle("my-turn", myTurn);
+  hand.classList.toggle("view-only", st.phase === "bidding");
   const slot = $("play-slot");
   slot.classList.toggle("hidden", !myTurn);
   slot.classList.toggle("active", myTurn && S.selected != null);
@@ -718,7 +726,8 @@ function renderGame() {
   playBtn.classList.toggle("hidden", !(myTurn && S.selected != null) || isCompact());
   playBtn.textContent = S.selected != null ? `Play ${cardName(st.hand[S.selected])}` : "Play card";
   const you = $("you-chip");
-  const showYou = showHand && !isLobby && !(st.phase === "playing" && st.current_player === me && !st.trick_complete);
+  const showYou = showHand && !isLobby && st.phase !== "bidding"
+    && !(st.phase === "playing" && st.current_player === me && !st.trick_complete);
   you.classList.toggle("hidden", !showYou);
   if (showYou) {
     const raw = bidRaw(st, me);
@@ -752,10 +761,12 @@ function setBid(v) {
   const max = S.state ? S.state.current_round : 0;
   S.bidVal = Math.max(0, Math.min(max, v));
   $("bid-value").textContent = S.bidVal;
-  $("btn-bid").textContent = `Lock bid ${S.bidVal}`;
+  $("btn-bid").textContent = `Lock ${S.bidVal}`;
   $("bid-nums")?.querySelectorAll(".bid-num").forEach((b) => {
     b.classList.toggle("selected", +b.dataset.bid === S.bidVal);
   });
+  const sel = $("bid-nums")?.querySelector(".bid-num.selected");
+  if (sel) try { sel.scrollIntoView({ inline: "center", block: "nearest" }); } catch { /* ignore */ }
 }
 $("btn-bid").onclick = () => doAction({ action: "bid", value: S.bidVal }).then(() => { S.bidVal = 0; });
 
@@ -793,28 +804,30 @@ function setSheet(kind, open) {
   document.body.classList.toggle(`sheet-open-${kind}`, open);
 }
 
-function renderBidSheet(st) {
+function renderBidBar(st) {
   const max = st.current_round;
   S.bidVal = Math.min(S.bidVal, max);
   const placed = Object.values(st.bids || {}).filter((b) => typeof b === "number");
   const total = placed.reduce((a, b) => a + b, 0);
   const open = st.bidding_mode !== "secret";
-  $("bid-info").textContent = `0–${max} tricks`;
-  $("bid-total").innerHTML = `<span class="bt-label">Total bids</span>
-    <span class="bt-val ${total > max ? "over" : ""}">${open ? total : "?"} <span style="font-size:14px;font-weight:700;color:var(--muted)">/ ${max}</span></span>`;
+  $("bid-info").textContent = `0–${max}`;
+  $("bid-total").innerHTML = `<span class="bt-label">Bids</span>
+    <span class="bt-val ${total > max ? "over" : ""}">${open ? total : "?"}<span class="bt-den">/${max}</span></span>`;
   $("bid-others").innerHTML = st.players.map((name, i) => {
     if (i === st.player_id) return "";
     const raw = bidRaw(st, i);
     const pending = raw === undefined;
     const shown = pending ? "…" : (raw === null || !open ? "✓" : raw);
-    return `<div class="bid-other ${pending ? "pending" : ""}"><span class="bo-name">${esc(name)}</span><span class="bo-bid">${shown}</span></div>`;
+    return `<span class="bid-other ${pending ? "pending" : ""}"><span class="bo-name">${esc(name)}</span><b class="bo-bid">${shown}</b></span>`;
   }).join("");
   $("bid-nums").innerHTML = Array.from({ length: max + 1 }, (_, v) =>
     `<button type="button" class="bid-num ${v === S.bidVal ? "selected" : ""}" data-bid="${v}">${v}</button>`).join("");
   $("bid-nums").querySelectorAll(".bid-num").forEach((b) => {
     b.onclick = () => setBid(+b.dataset.bid);
   });
-  $("btn-bid").textContent = `Lock bid ${S.bidVal}`;
+  $("btn-bid").textContent = `Lock ${S.bidVal}`;
+  const sel = $("bid-nums").querySelector(".bid-num.selected");
+  if (sel) try { sel.scrollIntoView({ inline: "center", block: "nearest" }); } catch { /* ignore */ }
 }
 
 function renderTrumpSheet(st) {

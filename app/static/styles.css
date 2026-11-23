@@ -1216,35 +1216,79 @@ table.rt { width: 100%; border-collapse: separate; border-spacing: 0; font-varia
 .sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .sheet-title { margin: 0; font-size: 26px; line-height: 1.1; }
 .sheet-sub { margin: 4px 0 0; color: var(--muted); font-size: 14px; font-weight: 600; }
+/* Compact bid bar — sits above the hand so cards stay visible */
+.bid-bar {
+  position: relative; z-index: 8;
+  margin: 4px auto 0; max-width: 920px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+  padding: 8px 10px; box-shadow: 0 6px 18px rgba(12, 14, 20, .08);
+}
+.bid-bar-top {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px; min-width: 0;
+}
 .bid-total {
-  background: var(--card2); border-radius: 14px; padding: 8px 12px; text-align: right; min-width: 96px;
+  flex: 0 0 auto; background: var(--card2); border-radius: 12px;
+  padding: 6px 10px; display: flex; align-items: baseline; gap: 6px;
 }
-.bid-total .bt-label { display: block; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-.bid-total .bt-val { font-size: 26px; font-weight: 900; font-variant-numeric: tabular-nums; color: var(--text); line-height: 1.1; }
+.bid-total .bt-label {
+  font-size: 10px; font-weight: 800; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.bid-total .bt-val {
+  font-size: 20px; font-weight: 900; font-variant-numeric: tabular-nums; color: var(--text); line-height: 1;
+}
+.bid-total .bt-den { font-size: 13px; font-weight: 700; color: var(--muted); margin-left: 1px; }
 .bid-total .bt-val.over { color: var(--accent); }
-.bid-others { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 8px; margin-bottom: 14px; }
-.bid-other {
-  background: var(--card2); border-radius: 12px; padding: 8px 6px; text-align: center;
+.bid-others {
+  display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; min-width: 0; flex: 1 1 auto;
+  scrollbar-width: none; -ms-overflow-style: none;
 }
-.bid-other .bo-name { display: block; font-size: 12px; font-weight: 700; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bid-other .bo-bid { font-size: 22px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.bid-others::-webkit-scrollbar { display: none; }
+.bid-other {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
+  background: var(--card2); border-radius: 999px; padding: 4px 9px 4px 8px;
+}
+.bid-other .bo-name {
+  font-size: 11px; font-weight: 700; color: var(--muted);
+  max-width: 7ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bid-other .bo-bid { font-size: 14px; font-weight: 900; font-variant-numeric: tabular-nums; }
 .bid-other.pending .bo-bid { color: var(--muted); }
-.bid-select-label {
-  font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase;
-  letter-spacing: .06em; margin-bottom: 8px;
+.bid-bar-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center;
 }
 .bid-nums {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px;
+  display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; min-width: 0;
+  padding-bottom: 2px; scrollbar-width: thin;
 }
 .bid-num {
-  height: 56px; border-radius: 14px; font-size: 22px; font-weight: 900;
-  background: var(--card2); border: 1px solid transparent; color: var(--text);
+  flex: 0 0 auto; width: 42px; height: 42px; border-radius: 12px; padding: 0;
+  font-size: 17px; font-weight: 900; background: var(--card2);
+  border: 1px solid transparent; color: var(--text);
 }
 .bid-num.selected {
   background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 32%, transparent);
 }
-.bid-lock { width: 100%; min-height: 54px; font-size: 17px; border-radius: 999px; font-weight: 800; }
+.bid-lock {
+  flex: 0 0 auto; min-width: 92px; min-height: 42px; padding: 0 14px;
+  font-size: 14px; font-weight: 800; border-radius: 999px; white-space: nowrap;
+}
+.hand.view-only .pcard { cursor: default; pointer-events: none; }
+body.bidding .bid-bar { margin-bottom: 2px; }
+@media (max-width: 640px) {
+  .bid-bar { margin: 2px 0 0; border-radius: 14px; padding: 7px 8px; }
+  .bid-num { width: 38px; height: 38px; font-size: 16px; border-radius: 11px; }
+  .bid-lock { min-width: 78px; min-height: 38px; font-size: 13px; padding: 0 12px; }
+  .bid-total .bt-val { font-size: 18px; }
+  body.bidding .table { height: clamp(200px, 30vh, 300px); }
+  body.bidding .hand-dock { margin-top: 6px; padding-top: 2px; }
+  body.bidding .hand { min-height: 148px; padding: 12px 2px 8px; }
+}
+@media (min-width: 641px) {
+  .bid-num { width: 46px; height: 46px; }
+  .bid-lock { min-height: 46px; font-size: 15px; }
+}
 
 .trump-hero { text-align: center; margin-bottom: 16px; }
 .trump-hero .flip-big { --cw: 110px; margin: 0 auto 12px; display: block; }

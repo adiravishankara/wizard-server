@@ -132,23 +132,6 @@
 
       <div id="turn-banner" class="turn-banner hidden" role="status"></div>
 
-      <div id="bid-scrim" class="sheet-scrim hidden"></div>
-      <div id="bid-panel" class="sheet bid-sheet hidden" role="dialog" aria-label="Place your bid">
-        <div class="sheet-handle" aria-hidden="true"></div>
-        <div class="sheet-head">
-          <div>
-            <h2 class="sheet-title">Place your bid</h2>
-            <p id="bid-info" class="sheet-sub"></p>
-          </div>
-          <div id="bid-total" class="bid-total" aria-live="polite"></div>
-        </div>
-        <div id="bid-others" class="bid-others"></div>
-        <div class="bid-select-label">Select bid</div>
-        <div id="bid-nums" class="bid-nums"></div>
-        <button id="btn-bid" class="primary bid-lock" type="button">Lock bid</button>
-        <span id="bid-value" class="hidden">0</span>
-      </div>
-
       <div id="trump-scrim" class="sheet-scrim hidden"></div>
       <div id="trump-panel" class="sheet trump-sheet hidden" role="dialog" aria-label="Choose trump">
         <div class="sheet-handle" aria-hidden="true"></div>
@@ -159,6 +142,19 @@
       <div id="roundover-panel" class="action-bar hidden">
         <span id="ready-info" class="action-label"></span>
         <button id="btn-ready" class="primary bid-go" type="button">Ready</button>
+      </div>
+
+      <div id="bid-panel" class="bid-bar hidden" role="region" aria-label="Place your bid">
+        <div class="bid-bar-top">
+          <div id="bid-total" class="bid-total" aria-live="polite"></div>
+          <div id="bid-others" class="bid-others"></div>
+        </div>
+        <div class="bid-bar-row">
+          <div id="bid-nums" class="bid-nums" role="group" aria-label="Bid amount"></div>
+          <button id="btn-bid" class="primary bid-lock" type="button">Lock bid</button>
+        </div>
+        <span id="bid-info" class="hidden"></span>
+        <span id="bid-value" class="hidden">0</span>
       </div>
 
       <div id="hand-panel" class="hand-dock">
