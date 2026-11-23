@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wizard — Card Game</title>
+<link rel="stylesheet" href="/static/styles.css">
+<script>
+(function () {
+  var pref = localStorage.getItem("wizard_theme") || "light";
+  var resolved = pref === "system"
+    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    : pref;
+  document.documentElement.setAttribute("data-theme", resolved);
+  document.documentElement.setAttribute("data-theme-pref", pref);
+})();
+</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">🃏 <span class="brand-text">Wizard</span></div>
+  <div class="topbar-right">
+    <nav>
+      <button id="nav-games" class="nav-btn active">Games</button>
+      <button id="nav-leagues" class="nav-btn">Leagues</button>
+    </nav>
+    <div class="theme-toggle" role="group" aria-label="Theme">
+      <button type="button" id="theme-light" data-theme-pref="light">Light</button>
+      <button type="button" id="theme-dark" data-theme-pref="dark">Dark</button>
+      <button type="button" id="theme-system" data-theme-pref="system">System</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- ============ GAMES VIEW ============ -->
+  <section id="view-games">
+    <div id="games-home" class="panel-grid">
+      <div class="card panel">
+        <h2>New game</h2>
+        <label>Your name <input id="new-name" placeholder="e.g. Adi" maxlength="24"></label>
+        <label>Bidding
+          <select id="new-bidding">
+            <option value="sequential">Sequential (normal)</option>
+            <option value="simultaneous">Simultaneous (home)</option>
+            <option value="secret">Blind / Canadian (bids hidden until end of hand)</option>
+            <option value="canadian">Canadian (last bidder can't even the total)</option>
+          </select>
+        </label>
+        <button id="btn-create" class="primary">Create game</button>
+      </div>
+      <div class="card panel">
+        <h2>Join game</h2>
+        <label>Game code <input id="join-code" placeholder="8-char code" maxlength="8"></label>
+        <label>Your name <input id="join-name" placeholder="e.g. Adi" maxlength="24"></label>
+        <button id="btn-join" class="primary">Join game</button>
+      </div>
+      <div class="card panel">
+        <h2>My sessions</h2>
+        <div id="sessions-list" class="sessions"></div>
+      </div>
+    </div>
+
+    <div id="game-screen" class="hidden">
+      <div class="game-top">
+        <button id="btn-leave" class="ghost icon-btn" type="button" title="Leave table">←</button>
+        <button id="g-room" class="room-btn" type="button" title="Copy room code">
+          <span class="room-label">Room</span>
+          <span class="game-code" id="g-code"></span>
+        </button>
+        <span id="g-round" class="pill"></span>
+        <span id="g-trump" class="trump-chip"></span>
+        <button id="btn-scores" class="score-btn" type="button">Score</button>
+      </div>
+      <div id="game-alert" class="alert hidden"></div>
+      <p id="status-line" class="status-line"></p>
+
+      <div id="lobby-panel" class="card hidden">
+        <div class="lobby-head">
+          <h2>Lobby</h2>
+          <div id="lobby-tags" class="lobby-tags"></div>
+        </div>
+        <div id="lobby-players" class="player-list seat-list"></div>
+        <div id="lobby-waiting" class="lobby-waiting hidden"></div>
+        <div id="lobby-tools" class="lobby-tools hidden">
+          <button id="btn-shuffle" class="ghost" type="button"><span aria-hidden="true">🔀</span> Shuffle seats</button>
+          <label class="check-toggle"><input type="checkbox" id="shuffle-on-start"><span>Shuffle at start</span></label>
+        </div>
+        <button id="btn-start" class="primary">Start game</button>
+        <div class="lobby-league">
+          <h3>League</h3>
+          <select id="link-league" aria-label="League"><option value="">No league</option></select>
+          <div id="link-seats" class="link-seats"></div>
+          <div id="link-teams" class="link-teams"></div>
+        </div>
+        <div id="custom-teams">
+          <h3>Teams <span class="hint">(optional)</span></h3>
+          <div id="team-editor"></div>
+          <div class="row">
+            <input id="new-team-name" placeholder="Team name" maxlength="24">
+            <input id="new-team-color" type="color" value="#4f8cff">
+            <button id="btn-add-team" class="ghost">Add team</button>
+          </div>
+          <button id="btn-save-teams" class="primary">Save teams</button>
+        </div>
+      </div>
+
+      <div id="table-panel" class="table-wrap">
+        <div id="table" class="table">
+          <div class="felt"></div>
+          <div id="trump-spot" class="trump-spot"></div>
+          <div id="table-center" class="table-center"></div>
+          <div id="trick-area" class="trick-zone"></div>
+          <div id="trick-ghosts" class="trick-zone ghosts" aria-hidden="true"></div>
+          <div id="seats"></div>
+        </div>
+      </div>
+
+      <div id="bid-panel" class="action-bar hidden">
+        <span id="bid-info" class="action-label"></span>
+        <div class="bid-controls">
+          <button id="bid-minus" class="bid-step" type="button" aria-label="Lower bid">−</button>
+          <span id="bid-value">0</span>
+          <button id="bid-plus" class="bid-step" type="button" aria-label="Raise bid">+</button>
+        </div>
+        <button id="btn-bid" class="primary bid-go" type="button">Bid</button>
+      </div>
+
+      <div id="trump-panel" class="action-bar trump-bar hidden">
+        <span class="action-label">Choose trump</span>
+        <div id="trump-actions" class="suit-picker">
+          <button data-suit="H" class="suit red" type="button"><span class="suit-sym">♥</span><span class="suit-name">Hearts</span></button>
+          <button data-suit="D" class="suit red" type="button"><span class="suit-sym">♦</span><span class="suit-name">Diamonds</span></button>
+          <button data-suit="C" class="suit" type="button"><span class="suit-sym">♣</span><span class="suit-name">Clubs</span></button>
+          <button data-suit="S" class="suit" type="button"><span class="suit-sym">♠</span><span class="suit-name">Spades</span></button>
+        </div>
+      </div>
+
+      <div id="roundover-panel" class="action-bar hidden">
+        <span id="ready-info" class="action-label"></span>
+        <button id="btn-ready" class="primary bid-go" type="button">Ready</button>
+      </div>
+
+      <div id="hand-panel" class="hand-dock">
+        <div id="hand" class="hand"></div>
+        <button id="btn-play" class="primary play-confirm hidden" type="button">Play card</button>
+      </div>
+
+      <div id="gameover-panel" class="card go-card hidden">
+        <div class="go-head">
+          <span class="go-trophy" aria-hidden="true">🏆</span>
+          <div>
+            <h2 id="go-title">Game over</h2>
+            <div id="go-sub" class="hint"></div>
+          </div>
+          <div id="go-rematch" class="go-rematch"></div>
+        </div>
+        <div class="go-body">
+          <div id="go-chart" class="go-chart"></div>
+          <div class="go-side">
+            <div id="final-scores" class="go-scores"></div>
+            <div id="go-teams" class="go-teams hidden"></div>
+          </div>
+        </div>
+        <div id="record-league" class="go-record hidden">
+          <select id="record-league-select" aria-label="League"><option value="">Choose league…</option></select>
+          <button id="btn-record" class="primary" type="button">Record result</button>
+          <button id="btn-view-standings" class="ghost hidden" type="button">View standings →</button>
+        </div>
+      </div>
+
+      <div id="drawer-scrim" class="scrim hidden"></div>
+      <aside id="score-drawer" class="drawer hidden" aria-label="Scoreboard">
+        <div class="drawer-head">
+          <h2>Scoreboard</h2>
+          <button id="btn-scores-close" class="ghost icon-btn" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="scores"></div>
+        <div id="score-history"></div>
+        <div class="hidden" id="teams-card">
+          <h3>Team scores</h3>
+          <div id="team-scores"></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============ LEAGUES VIEW ============ -->
+  <section id="view-leagues" class="hidden">
+    <div id="leagues-home">
+      <div class="lg-hero">
+        <div class="lg-hero-text">
+          <h1 class="lg-title">Leagues</h1>
+          <div id="leagues-summary" class="lg-sub"></div>
+        </div>
+        <form id="league-create" class="lg-create">
+          <input id="league-name" placeholder="New league name" maxlength="48" aria-label="League name">
+          <button id="btn-create-league" class="primary" type="submit">Create</button>
+        </form>
+      </div>
+      <div id="leagues-list" class="lg-grid"></div>
+    </div>
+
+    <div id="league-screen" class="hidden">
+      <div class="lg-head">
+        <button id="btn-league-back" class="ghost icon-btn" type="button" aria-label="All leagues">←</button>
+        <div class="lg-head-main">
+          <h1 id="league-title" class="lg-title"></h1>
+          <div id="league-meta" class="lg-sub"></div>
+        </div>
+        <button id="btn-add-result" class="primary lg-add" type="button">+ Result</button>
+      </div>
+      <nav class="seg" role="tablist" aria-label="League sections">
+        <button id="tab-players" class="seg-btn active" type="button" role="tab">Players</button>
+        <button id="tab-teams" class="seg-btn" type="button" role="tab">Teams</button>
+        <button id="tab-games" class="seg-btn" type="button" role="tab">Games</button>
+        <button id="tab-roster" class="seg-btn" type="button" role="tab">Roster</button>
+      </nav>
+      <div id="league-tab-players" class="lg-pane"></div>
+      <div id="league-tab-teams" class="lg-pane hidden"></div>
+      <div id="league-tab-games" class="lg-pane hidden"></div>
+      <div id="league-tab-roster" class="lg-pane hidden"></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="alert toast hidden" role="status"></div>
+<div id="modal-scrim" class="scrim modal-scrim hidden"></div>
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true"></div>
+<div id="confirm-scrim" class="scrim confirm-scrim hidden"></div>
+<div id="confirm" class="modal confirm hidden" role="alertdialog" aria-modal="true"></div>
+
+<script src="/static/chart.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

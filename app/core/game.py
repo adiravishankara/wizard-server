@@ -87,8 +87,8 @@ class WizardGame:
                 self.state.phase = GamePhase.BIDDING
             elif trump_card.type == CardType.WIZARD:
                 self.state.phase = GamePhase.WAITING_TRUMP
-                # Dealer must pick trump suit
-                self.state.current_player = self.state.dealer_idx
+                # House rule: player to the right of the dealer picks trump
+                self.state.current_player = (self.state.dealer_idx - 1) % num_players
             else:
                 self.state.trump_suit = trump_card.suit
                 self.state.phase = GamePhase.BIDDING
@@ -97,7 +97,8 @@ class WizardGame:
             self.state.phase = GamePhase.BIDDING
 
     def choose_trump(self, player_idx: int, suit: str):
-        if self.state.phase != GamePhase.WAITING_TRUMP or player_idx != self.state.dealer_idx:
+        chooser_idx = (self.state.dealer_idx - 1) % len(self.state.players)
+        if self.state.phase != GamePhase.WAITING_TRUMP or player_idx != chooser_idx:
             return False
         if suit not in self.SUITS:
             return False
