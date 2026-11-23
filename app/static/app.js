@@ -633,12 +633,15 @@ function renderGame() {
   if (st.phase === "waiting_trump") {
     trumpEl.textContent = compact ? "Trump ?" : "Choosing trump";
     trumpEl.classList.remove("none");
+    trumpEl.removeAttribute("data-suit");
   } else if (st.trump_suit) {
     trumpEl.innerHTML = `Trump <span class="${suitClass(st.trump_suit)}">${SUIT_SYM[st.trump_suit]}</span>`;
     trumpEl.classList.remove("none");
+    trumpEl.dataset.suit = st.trump_suit;
   } else {
     trumpEl.textContent = "No trump";
     trumpEl.classList.add("none");
+    trumpEl.removeAttribute("data-suit");
   }
   const isLobby = st.phase === "lobby";
   const over = st.phase === "game_over";
@@ -715,8 +718,9 @@ function renderGame() {
   playBtn.classList.toggle("hidden", !(myTurn && S.selected != null) || isCompact());
   playBtn.textContent = S.selected != null ? `Play ${cardName(st.hand[S.selected])}` : "Play card";
   const you = $("you-chip");
-  you.classList.toggle("hidden", !showHand || isLobby);
-  if (showHand) {
+  const showYou = showHand && !isLobby && !(st.phase === "playing" && st.current_player === me && !st.trick_complete);
+  you.classList.toggle("hidden", !showYou);
+  if (showYou) {
     const raw = bidRaw(st, me);
     const won = st.trick_wins[me] ?? 0;
     you.textContent = `You ${typeof raw === "number" ? `${won}/${raw}` : won}`;

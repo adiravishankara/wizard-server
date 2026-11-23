@@ -217,8 +217,14 @@ button:disabled { opacity: .45; cursor: default; }
   background: var(--card2); border: 1px solid var(--border); border-radius: 999px;
   padding: 5px 11px; font-size: 13px; color: var(--muted); font-weight: 650; white-space: nowrap;
 }
-.trump-chip, #g-trump { background: var(--trump-bg); border-color: var(--red); color: var(--trump-text); font-weight: 750; }
+#g-trump, .trump-chip {
+  background: var(--card2); border-color: var(--border); color: var(--text); font-weight: 750;
+}
 #g-trump.none { background: var(--chip); border-color: var(--border); color: var(--muted); }
+#g-trump[data-suit="H"] { background: color-mix(in srgb, var(--suit-h) 12%, var(--card)); border-color: color-mix(in srgb, var(--suit-h) 45%, var(--border)); }
+#g-trump[data-suit="D"] { background: color-mix(in srgb, var(--suit-d) 12%, var(--card)); border-color: color-mix(in srgb, var(--suit-d) 45%, var(--border)); }
+#g-trump[data-suit="C"] { background: color-mix(in srgb, var(--suit-c) 12%, var(--card)); border-color: color-mix(in srgb, var(--suit-c) 45%, var(--border)); }
+#g-trump[data-suit="S"] { background: color-mix(in srgb, var(--suit-s) 10%, var(--card)); border-color: color-mix(in srgb, var(--suit-s) 35%, var(--border)); }
 #g-trump .suit-h, .trump-label .suit-h, .lead-chip .suit-h { color: var(--suit-h); }
 #g-trump .suit-d, .trump-label .suit-d, .lead-chip .suit-d { color: var(--suit-d); }
 #g-trump .suit-c, .trump-label .suit-c, .lead-chip .suit-c { color: var(--suit-c); }
