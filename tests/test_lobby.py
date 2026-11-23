@@ -154,3 +154,16 @@ def test_rematch_join_needs_a_rematch_and_a_valid_token(client):
     assert client.post(f"/api/game/{gid}/rematch", json={"token": "nope"}).status_code == 403
     state = json.loads(json.dumps(client.post(f"/api/game/{gid}/rematch", json={"token": host["token"]}).json()))
     assert state["name"] == "Ada"
+
+
+def test_host_can_change_bidding_mode(live_server):
+    import httpx
+    with httpx.Client(base_url=live_server["http"], timeout=10) as http:
+        host = http.post("/api/game/join", json={"name": "Ada", "bidding_mode": "sequential"}).json()
+        guest = http.post("/api/game/join", json={"name": "Bea", "game_id": host["game_id"]}).json()
+        r = http.post(f"/api/game/{host['game_id']}/lobby-settings",
+                      json={"token": host["token"], "bidding_mode": "secret"})
+        assert r.status_code == 200, r.text
+        assert r.json()["bidding_mode"] == "secret"
+        assert http.post(f"/api/game/{host['game_id']}/lobby-settings",
+                         json={"token": guest["token"], "bidding_mode": "canadian"}).status_code == 403

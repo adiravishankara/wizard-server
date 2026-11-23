@@ -174,6 +174,7 @@ def test_league_ui_is_served_without_browser_dialogs(client):
 def test_game_over_and_lobby_ui_hooks_are_served(client):
     html = client.get("/").text
     for el in ("go-chart", "go-rematch", "btn-shuffle", "shuffle-on-start", "lobby-waiting",
+               "lobby-code", "lobby-mode", "play-slot", "turn-banner", "bid-nums", "suit-rows",
                '<script src="/static/chart.js">'):
         assert el in html
     chart = client.get("/static/chart.js")
