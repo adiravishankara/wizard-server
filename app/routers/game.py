@@ -265,16 +265,24 @@ async def game_action(game_id: str, request: ActionRequest):
     if request.action == "bid":
         success, error_detail = game.submit_bid(request.player_id, request.value)
     elif request.action == "play":
-        # Check why it's invalid
+        # Never trust the client: validate turn + legality before mutating.
+        phase = getattr(game.state.phase, "value", game.state.phase)
         hand = game.state.hands.get(request.player_id, [])
-        if not (0 <= request.value < len(hand)):
+        if phase != "playing":
+            error_detail = "Not in the playing phase."
+        elif request.player_id != game.state.current_player:
+            waiting = game.state.players[game.state.current_player]
+            error_detail = f"Not your turn to play. Waiting for {waiting}."
+        elif not (0 <= request.value < len(hand)):
             error_detail = "Invalid card index."
         else:
             card = hand[request.value]
             legal_cards = game.get_legal_plays(request.player_id)
             if card not in legal_cards:
-                if game.state.lead_suit and card.suit != game.state.lead_suit and card.type == CardType.REGULAR:
-                    error_detail = f"Must follow suit! Lead suit is {game.state.lead_suit}."
+                lead = game.state.lead_suit
+                ctype = getattr(card.type, "value", card.type)
+                if lead and ctype == "regular" and card.suit != lead:
+                    error_detail = f"Must follow suit ({lead})."
                 else:
                     error_detail = "This card cannot be played now."
             else:
@@ -292,6 +300,8 @@ async def game_action(game_id: str, request: ActionRequest):
                         set_hold(game_id, completed)
                     else:
                         clear_hold(game_id)
+                else:
+                    error_detail = "Play rejected."
     elif request.action == "choose_trump":
         success = game.choose_trump(request.player_id, request.suit)
         if not success:

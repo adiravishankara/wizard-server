@@ -564,7 +564,12 @@ html[data-theme="dark"] .felt {
   transform: translateY(calc(var(--fy, 0px) - 30px)) rotate(var(--fr, 0deg));
   box-shadow: 0 0 0 3px var(--good), 0 14px 24px rgba(0,0,0,.3);
 }
-.hand .pcard.illegal { filter: grayscale(.7) brightness(.82); opacity: .55; transform: translateY(calc(var(--fy, 0px) + 8px)) rotate(var(--fr, 0deg)); }
+.hand .pcard.illegal {
+  filter: grayscale(.7) brightness(.82); opacity: .55;
+  transform: translateY(calc(var(--fy, 0px) + 8px)) rotate(var(--fr, 0deg));
+  pointer-events: none; cursor: default; touch-action: none;
+}
+.hand.my-turn .pcard.illegal { pointer-events: none; cursor: not-allowed; }
 .play-confirm {
   display: block; width: 100%; max-width: 380px; margin: 6px auto 0;
   min-height: 52px; font-size: 18px; border-radius: 14px;
