@@ -38,12 +38,23 @@ async def health():
     return {"status": "ok", "league_store": league_store.backend_name}
 
 
-@app.get("/")
-async def root():
+def _spa_index():
     index = STATIC_DIR / "index.html"
     if index.exists():
         return FileResponse(index)
     return {"message": "Welcome to the Wizard Game API"}
+
+
+@app.get("/")
+async def root():
+    return _spa_index()
+
+
+@app.get("/join/{code}")
+async def join_spa(code: str):
+    """Serve the SPA so shareable /join/<CODE> links work on refresh and deep link."""
+    return _spa_index()
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))

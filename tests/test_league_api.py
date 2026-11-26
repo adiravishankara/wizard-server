@@ -174,12 +174,41 @@ def test_league_ui_is_served_without_browser_dialogs(client):
 def test_game_over_and_lobby_ui_hooks_are_served(client):
     html = client.get("/").text
     for el in ("go-chart", "go-rematch", "btn-shuffle", "shuffle-on-start", "lobby-waiting",
-               "lobby-code", "lobby-mode", "play-slot", "turn-banner", "bid-nums", "suit-rows",
+               "lobby-code", "lobby-mode", "lobby-join-link", "btn-copy-link", "btn-share-link",
+               "join-link-panel", "btn-jl-join", "play-slot", "turn-banner", "bid-nums", "suit-rows",
                '<script src="/static/chart.js">'):
         assert el in html
     chart = client.get("/static/chart.js")
     assert chart.status_code == 200
     assert "prefers-reduced-motion" in chart.text
+
+
+def test_join_spa_route_serves_index(client):
+    res = client.get("/join/abc12def")
+    assert res.status_code == 200
+    assert "text/html" in res.headers.get("content-type", "")
+    assert "join-link-panel" in res.text
+    assert client.get("/join/missing01").status_code == 200
+
+
+def test_join_info_reports_open_started_and_missing(client):
+    created = client.post("/api/game/join", json={"name": "Ada"}).json()
+    gid = created["game_id"]
+    open_info = client.get(f"/api/game/{gid}/join-info")
+    assert open_info.status_code == 200
+    body = open_info.json()
+    assert body["open"] is True and body["phase"] == "lobby" and body["players"] == 1
+
+    client.post("/api/game/join", json={"name": "Bea", "game_id": gid})
+    client.post("/api/game/join", json={"name": "Cal", "game_id": gid})
+    assert client.post(f"/api/game/{gid}/start").status_code == 200
+    started = client.get(f"/api/game/{gid}/join-info").json()
+    assert started["open"] is False
+    assert "already started" in started["detail"].lower()
+
+    missing = client.get("/api/game/nope0000/join-info")
+    assert missing.status_code == 404
+    assert "not found" in missing.json()["detail"].lower()
 
 
 def _hand(dealer, trump, *lines):

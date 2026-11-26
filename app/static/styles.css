@@ -1321,15 +1321,45 @@ body.bidding .bid-bar { margin-bottom: 2px; }
 
 /* lobby */
 .lobby-code-row {
-  display: flex; align-items: center; gap: 10px; margin: 0 0 14px;
+  display: flex; align-items: center; gap: 10px; margin: 0 0 14px; flex-wrap: wrap;
   background: var(--card2); border-radius: 16px; padding: 12px 14px;
 }
-.lobby-code-block { flex: 1 1 auto; min-width: 0; }
+.lobby-code-block { flex: 1 1 160px; min-width: 0; }
 .lobby-code-label { display: block; font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 .lobby-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 28px; font-weight: 900; letter-spacing: .08em; color: var(--text);
+  display: block; line-height: 1.15;
 }
+.lobby-join-link {
+  display: block; margin-top: 4px; font-size: 12px; font-weight: 650; color: var(--accent);
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 100%;
+}
+.lobby-join-link:hover { text-decoration: underline; }
+.lobby-share-actions {
+  display: flex; flex-wrap: wrap; gap: 8px; flex: 0 0 auto;
+}
+.lobby-share-actions .ghost { white-space: nowrap; }
+.share-btn { display: none; }
+@media (max-width: 720px) {
+  .share-btn { display: inline-flex; }
+}
+
+/* join-from-link */
+.join-link-panel { max-width: 420px; margin: 24px auto; }
+.join-link-room {
+  margin: 0 0 6px; font-size: 15px; font-weight: 700; color: var(--muted);
+}
+.join-link-room code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px; font-weight: 900; letter-spacing: .06em; color: var(--text);
+}
+.join-link-error {
+  margin-top: 12px; padding: 14px; border-radius: 14px;
+  background: var(--bad-soft); color: var(--alert-text);
+}
+.join-link-error p { margin: 0 0 12px; font-weight: 700; }
 .mode-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px;
 }

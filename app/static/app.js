@@ -65,6 +65,45 @@ function removeSession(sess) {
     JSON.stringify(getSessions().filter((s) => sessionKey(s) !== key)));
 }
 
+const NAME_KEY = "wizard_player_name";
+function rememberedName() {
+  try { return localStorage.getItem(NAME_KEY) || ""; } catch { return ""; }
+}
+function rememberName(name) {
+  const n = String(name || "").trim();
+  if (!n) return;
+  try { localStorage.setItem(NAME_KEY, n); } catch { /* ignore */ }
+}
+function joinUrl(code) {
+  return `${location.origin}/join/${encodeURIComponent(code)}`;
+}
+function parseJoinCode() {
+  const path = (location.pathname || "").replace(/\/+$/, "") || "/";
+  const m = path.match(/^\/join\/([^/]+)$/i);
+  if (m) return decodeURIComponent(m[1]).trim();
+  const room = new URLSearchParams(location.search).get("room");
+  return room ? room.trim() : "";
+}
+function clearJoinPath() {
+  const params = new URLSearchParams(location.search);
+  params.delete("room");
+  const rest = params.toString();
+  const next = "/" + (rest ? `?${rest}` : "") + location.hash;
+  if (location.pathname !== "/" || location.search.includes("room=")) {
+    history.replaceState(null, "", next);
+  }
+}
+async function copyText(text, okMsg) {
+  try {
+    await navigator.clipboard.writeText(text);
+    alertMsg(okMsg || "Copied", true);
+    return true;
+  } catch {
+    alertMsg("Could not copy");
+    return false;
+  }
+}
+
 /* ---------- navigation ---------- */
 function showView(which, opts = {}) {
   $("view-games").classList.toggle("hidden", which !== "games");
@@ -112,6 +151,14 @@ function initTheme() {
 initTheme();
 
 /* ---------- games home ---------- */
+function fillRememberedNames() {
+  const n = rememberedName();
+  if (!n) return;
+  if (!$("new-name").value) $("new-name").value = n;
+  if (!$("join-name").value) $("join-name").value = n;
+  if (!$("jl-name").value) $("jl-name").value = n;
+}
+
 $("btn-create").onclick = async () => {
   const name = $("new-name").value.trim();
   if (!name) return alertMsg("Enter your name first.");
@@ -119,6 +166,7 @@ $("btn-create").onclick = async () => {
     const r = await gapi("/join", "POST", {
       name, bidding_mode: $("new-bidding").value,
     });
+    rememberName(name);
     enterGame({ game_id: r.game_id, player_id: r.player_id, token: r.token, name });
   } catch (e) { alertMsg(e.message); }
 };
@@ -129,8 +177,89 @@ $("btn-join").onclick = async () => {
   if (!code || !name) return alertMsg("Enter a game code and your name.");
   try {
     const r = await gapi("/join", "POST", { name, game_id: code });
+    rememberName(name);
     enterGame({ game_id: r.game_id, player_id: r.player_id, token: r.token, name });
   } catch (e) { alertMsg(e.message); }
+};
+
+function showGamesHome() {
+  $("join-link-panel").classList.add("hidden");
+  $("games-home").classList.remove("hidden");
+  $("jl-error").classList.add("hidden");
+  $("jl-form").classList.remove("hidden");
+  fillRememberedNames();
+  renderSessions();
+}
+
+function showJoinLinkError(msg) {
+  $("jl-form").classList.add("hidden");
+  $("jl-error").classList.remove("hidden");
+  $("jl-error-msg").textContent = msg;
+  $("jl-meta").textContent = "";
+}
+
+async function openJoinFromLink(code) {
+  showView("games");
+  $("game-screen").classList.add("hidden");
+  $("games-home").classList.add("hidden");
+  $("join-link-panel").classList.remove("hidden");
+  $("jl-code").textContent = code;
+  $("jl-meta").textContent = "Checking room…";
+  $("jl-error").classList.add("hidden");
+  $("jl-form").classList.remove("hidden");
+  fillRememberedNames();
+  $("jl-name").focus();
+
+  const existing = getSessions().find((s) => s.game_id === code && s.token);
+  if (existing) {
+    if (await resumeSession(existing)) {
+      clearJoinPath();
+      return;
+    }
+  }
+
+  try {
+    const info = await gapi(`/${encodeURIComponent(code)}/join-info`);
+    if (!info.open) {
+      showJoinLinkError(info.detail || "This room is not open for new players.");
+      return;
+    }
+    $("jl-meta").textContent = `${info.players} player${info.players === 1 ? "" : "s"} in lobby`;
+  } catch (e) {
+    const msg = String(e.message || "");
+    if (/not found/i.test(msg)) {
+      showJoinLinkError("This room was not found or has expired.");
+    } else {
+      showJoinLinkError(msg || "Could not open this room.");
+    }
+  }
+}
+
+$("btn-jl-join").onclick = async () => {
+  const code = ($("jl-code").textContent || "").trim();
+  const name = $("jl-name").value.trim();
+  if (!code) return showJoinLinkError("Missing room code.");
+  if (!name) return alertMsg("Enter your name first.");
+  try {
+    const r = await gapi("/join", "POST", { name, game_id: code });
+    rememberName(name);
+    clearJoinPath();
+    enterGame({ game_id: r.game_id, player_id: r.player_id, token: r.token, name });
+  } catch (e) {
+    const msg = String(e.message || "");
+    if (/not found/i.test(msg)) {
+      showJoinLinkError("This room was not found or has expired.");
+    } else if (/full|already started/i.test(msg)) {
+      showJoinLinkError("This game is full or has already started.");
+    } else {
+      alertMsg(msg);
+    }
+  }
+};
+
+$("btn-jl-home").onclick = () => {
+  clearJoinPath();
+  showGamesHome();
 };
 
 function renderSessions() {
@@ -164,6 +293,7 @@ async function resumeSession(sess) {
       token: sess.token,
       name: r.name,
     });
+    return true;
   } catch (e) {
     alertMsg(e.message);
     const msg = String(e.message || "");
@@ -171,6 +301,7 @@ async function resumeSession(sess) {
       removeSession(sess);
       renderSessions();
     }
+    return false;
   }
 }
 
@@ -183,6 +314,7 @@ function enterGame(sess) {
   S.link = null;
   S.teamScores = [];
   S.lastPhase = null;
+  $("join-link-panel").classList.add("hidden");
   $("games-home").classList.add("hidden");
   $("game-screen").classList.remove("hidden");
   $("g-code").textContent = sess.game_id;
@@ -206,8 +338,8 @@ $("btn-leave").onclick = () => {
   try { sessionStorage.removeItem("wizard_active"); } catch { /* ignore */ }
   document.body.classList.remove("bidding", "sheet-open-trump", "sheet-open-bid");
   $("game-screen").classList.add("hidden");
-  $("games-home").classList.remove("hidden");
-  renderSessions();
+  clearJoinPath();
+  showGamesHome();
 };
 
 function connectWS() {
@@ -1004,7 +1136,16 @@ function lobbyMoves(st) {
 function renderLobby(st) {
   const moved = lobbyMoves(st);
   const isHost = st.host === st.player_id || st.host == null;
-  $("lobby-code").textContent = S.session.game_id;
+  const code = S.session.game_id;
+  const url = joinUrl(code);
+  $("lobby-code").textContent = code;
+  const link = $("lobby-join-link");
+  link.textContent = url;
+  link.href = url;
+  link.onclick = (e) => {
+    e.preventDefault();
+    copyText(url, "Join link copied");
+  };
   $("lobby-players").innerHTML = st.players.map((n, i) => lobbySeat(st, i, moved.has(n))).join("");
   const tags = [];
   if (st.rematch_of) tags.push(`<span class="pill">Rematch</span>`);
@@ -1235,18 +1376,32 @@ $("btn-scores").onclick = () => openScores($("score-drawer").classList.contains(
 $("btn-scores-close").onclick = () => openScores(false);
 $("drawer-scrim").onclick = () => openScores(false);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") openScores(false); });
-$("btn-copy-code").onclick = async () => {
-  try {
-    await navigator.clipboard.writeText(S.session.game_id);
-    alertMsg("Code copied", true);
-  } catch { alertMsg("Could not copy"); }
+async function shareOrCopyJoinLink() {
+  if (!S.session) return;
+  const code = S.session.game_id;
+  const url = joinUrl(code);
+  if (typeof navigator.share === "function") {
+    try {
+      await navigator.share({
+        title: "Join my Wizard game",
+        text: `Join room ${code}`,
+        url,
+      });
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+    }
+  }
+  await copyText(url, "Join link copied");
+}
+$("btn-copy-link").onclick = async () => {
+  if (!S.session) return;
+  await copyText(joinUrl(S.session.game_id), "Join link copied");
 };
+$("btn-share-link").onclick = () => shareOrCopyJoinLink();
 $("g-room").onclick = async () => {
   if (!S.session) return;
-  try {
-    await navigator.clipboard.writeText(S.session.game_id);
-    alertMsg("Room code copied.", true);
-  } catch { alertMsg(`Room code: ${S.session.game_id}`, true); }
+  await copyText(joinUrl(S.session.game_id), "Join link copied");
 };
 
 let resizeRaf = 0;
@@ -2214,11 +2369,13 @@ function renderRosterTab() {
 }
 
 /* ---------- init ---------- */
+fillRememberedNames();
 renderSessions();
 const params = new URLSearchParams(location.search);
 if (["light", "dark", "system"].includes(params.get("theme") || "")) {
   applyTheme(params.get("theme"));
 }
+const joinCode = parseJoinCode();
 if (params.get("rejoin") && params.get("token")) {
   resumeSession({
     game_id: params.get("rejoin"),
@@ -2229,6 +2386,8 @@ if (params.get("rejoin") && params.get("token")) {
   ["rejoin", "token", "name"].forEach((k) => params.delete(k));
   const rest = params.toString();
   history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+} else if (joinCode) {
+  openJoinFromLink(joinCode);
 } else {
   try {
     const active = JSON.parse(sessionStorage.getItem("wizard_active") || "null");

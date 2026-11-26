@@ -34,8 +34,7 @@ class Player:
     def connect(self, ws_base: str):
         self.ws = ws_connect(
             f"{ws_base}/api/game/ws/{self.game_id}/{self.player_id}",
-            open_timeout=5,
-            legacy=True,
+            open_timeout=5
         )
         self.state = json.loads(self.ws.recv(timeout=5))
         return self
