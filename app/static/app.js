@@ -657,7 +657,7 @@ function renderTrumpSpot(st) {
   else if (st.trump_suit) {
     label = `Trump <span class="${suitClass(st.trump_suit)}">${SUIT_SYM[st.trump_suit]}</span>`;
   } else if (flip.kind === "jester") label = "Jester — no trump";
-  else label = "No trump";
+  else label = "No trump"; /* final round (all cards dealt) or no flip */
   el.innerHTML = `<div class="deck-row"><div class="deck">${cardHTML(null)}${cardHTML(null)}${cardHTML(null)}</div>${flipped}${chosen}</div>
     <div class="trump-label">${label}</div>`;
 }
@@ -848,9 +848,10 @@ function renderGame() {
     const legal = myTurn && st.legal_moves.includes(i);
     const cls = [
       !myTurn ? "" : (legal ? "legal" : "illegal"),
-      S.selected === i ? "lifted selected" : "",
+      myTurn && legal && S.selected === i ? "lifted selected" : "",
     ].join(" ");
-    return cardHTML(c, { cls, attrs: `data-card="${i}" title="${cardName(c)}"` });
+    const attrs = `data-card="${i}" title="${cardName(c)}"${legal ? "" : ` aria-disabled="true"`}`;
+    return cardHTML(c, { cls, attrs });
   }).join("");
   layoutFan(hand);
   bindHandGestures(hand, myTurn);
@@ -881,7 +882,11 @@ async function doAction(body) {
       { player_id: S.session.player_id, ...body });
   } catch (e) { alertMsg(e.message); }
 }
-function playCard(i) { doAction({ action: "play", value: i }); }
+function playCard(i) {
+  if (!S.state || S.state.phase !== "playing") return;
+  if (!(S.state.legal_moves || []).includes(i)) return;
+  doAction({ action: "play", value: i });
+}
 $("btn-play").onclick = () => {
   if (S.selected == null) return;
   const i = S.selected;
