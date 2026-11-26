@@ -386,7 +386,7 @@ const SUIT_NAME = { H: "Hearts", D: "Diamonds", C: "Clubs", S: "Spades" };
 const MAX_ROUNDS = { 3: 20, 4: 15, 5: 12, 6: 10 };
 const isRedSuit = (s) => s === "H" || s === "D";
 const suitClass = (s) => ({ H: "suit-h", D: "suit-d", C: "suit-c", S: "suit-s" }[s] || "");
-const SUIT_DESC = { H: "Crimson suit", D: "Royal blue suit", C: "Forest green suit", S: "Obsidian suit" };
+const SUIT_DESC = { H: "Red suit", D: "Red suit", C: "Black suit", S: "Black suit" };
 function rankLabel(r) {
   return r === 11 ? "J" : r === 12 ? "Q" : r === 13 ? "K" : r === 14 ? "A" : String(r);
 }
@@ -1025,16 +1025,16 @@ function renderTurnBanner(st) {
   if (!myTurn) { el.classList.add("hidden"); el.innerHTML = ""; return; }
   const trick = st.current_trick || [];
   const lead = trick[0] && trick[0][1];
-  let msg = "Your turn";
+  let main = "Your turn";
   if (lead && lead.type === "regular" && lead.suit) {
-    msg = `Your turn — follow ${SUIT_SYM[lead.suit]}`;
+    main = `Your turn — follow <span class="tb-suit ${suitClass(lead.suit)}">${SUIT_SYM[lead.suit]}</span>`;
   } else if (!trick.length) {
-    msg = "Your lead";
+    main = "Your lead";
   }
   const raw = bidRaw(st, me);
   const won = st.trick_wins[me] ?? 0;
   el.classList.remove("hidden");
-  el.innerHTML = `<span class="tb-main">${esc(msg)}</span>
+  el.innerHTML = `<span class="tb-main">${main}</span>
     <span class="tb-you">You ${typeof raw === "number" ? `${won}/${raw}` : won}</span>`;
 }
 
@@ -1905,7 +1905,7 @@ function trumpCell(r) {
   if (r.trump_source === "jester") return `<span class="rt-nt" title="Jester flipped">J</span>`;
   if (!r.trump) return `<span class="rt-nt" title="No trump">–</span>`;
   const who = r.trump_source === "wizard" ? `Wizard flipped${r.trump_chosen_by ? ` · ${r.trump_chosen_by} chose` : ""}` : SUIT_NAME[r.trump];
-  return `<span class="rt-suit ${isRedSuit(r.trump) ? "red" : ""}" title="${esc(who)}">${SUIT_SYM[r.trump]}</span>${r.trump_source === "wizard" ? `<sup class="rt-w">W</sup>` : ""}`;
+  return `<span class="rt-suit ${isRedSuit(r.trump) ? "red" : "black"}" title="${esc(who)}">${SUIT_SYM[r.trump]}</span>${r.trump_source === "wizard" ? `<sup class="rt-w">W</sup>` : ""}`;
 }
 
 function openGameDetail(rid) {

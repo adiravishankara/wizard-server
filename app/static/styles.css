@@ -23,12 +23,13 @@
   --alert-text: #8A1F30;
   --success-bg: #D8F3EE;
   --success-text: #0A5A4E;
-  /* suits (accessible on both themes) */
+  /* classic two-color deck: hearts/diamonds red, clubs/spades black */
   --suit-h: #C62828;
-  --suit-d: #1565C0;
-  --suit-c: #1B7A4A;
+  --suit-d: #C62828;
+  --suit-c: #1A1A22;
   --suit-s: #1A1A22;
   --red: var(--suit-h);
+  --suit-black: #1A1A22;
   --trump-bg: #FCE8EB;
   --trump-text: #8A1F30;
   /* table — soft stone, not green */
@@ -85,11 +86,13 @@ html[data-theme="dark"] {
   --alert-text: #FFB4B8;
   --success-bg: #163B36;
   --success-text: #9BE8D8;
+  /* UI chrome on dark surfaces: readable red + near-white for black suits */
   --suit-h: #FF6B6B;
-  --suit-d: #5BA3FF;
-  --suit-c: #4ECB8A;
-  --suit-s: #D0D0D8;
+  --suit-d: #FF6B6B;
+  --suit-c: #E8E6EF;
+  --suit-s: #E8E6EF;
   --red: var(--suit-h);
+  --suit-black: #E8E6EF;
   --trump-bg: #3A2228;
   --trump-text: #FFB4B8;
   /* table — deep slate / ink */
@@ -369,7 +372,8 @@ html[data-theme="dark"] .felt {
   border: 1px solid var(--card-edge); display: grid; place-items: center;
   font-size: 22px; color: var(--card-ink); box-shadow: 0 1px 3px rgba(0,0,0,.2); flex: 0 0 auto;
 }
-.trump-tile.red { color: var(--card-red); }
+.trump-tile.red, .trump-tile.suit-h, .trump-tile.suit-d { color: #C62828; }
+.trump-tile.black, .trump-tile.suit-c, .trump-tile.suit-s { color: #1A1A22; }
 .trump-tile.none { font-size: 10px; font-weight: 800; color: var(--muted); text-align: center; line-height: 1.05; }
 .seat-backs { display: flex; align-items: center; margin-left: 2px; }
 .seat-backs .pcard { --cw: 20px; margin-left: -13px; box-shadow: 0 1px 2px rgba(0,0,0,.35); }
@@ -440,11 +444,9 @@ html[data-theme="dark"] .felt {
   flex: 0 0 auto; overflow: hidden;
   font-family: Georgia, "Times New Roman", serif;
 }
-.pcard.red, .pcard.suit-h { color: var(--suit-h); }
-.pcard.suit-d { color: var(--suit-d); }
-.pcard.suit-c { color: var(--suit-c); }
-.pcard.black, .pcard.suit-s { color: var(--suit-s); }
-html[data-theme="dark"] .pcard.suit-s { color: #1A1A22; }
+/* Card faces stay light in both themes — always classic red/black ink */
+.pcard.red, .pcard.suit-h, .pcard.suit-d { color: #C62828; }
+.pcard.black, .pcard.suit-c, .pcard.suit-s { color: #1A1A22; }
 .pcard .idx {
   position: absolute; display: flex; flex-direction: column; align-items: center;
   line-height: .95; font-weight: 800; z-index: 1; min-width: 1.1em;
@@ -467,7 +469,7 @@ html[data-theme="dark"] .pcard.suit-s { color: #1A1A22; }
   position: absolute; inset: 15% 20%; border-radius: .35em;
   border: 1.5px solid currentColor;
   background:
-    linear-gradient(180deg, rgba(240, 196, 80, .22), rgba(240, 196, 80, .06) 50%, rgba(43, 109, 224, .1));
+    linear-gradient(180deg, rgba(240, 196, 80, .22), rgba(240, 196, 80, .08) 55%, rgba(26, 26, 34, .06));
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .1em;
 }
 .pcard .court svg { width: 62%; height: auto; }
@@ -537,7 +539,8 @@ html[data-theme="dark"] .pcard.suit-s { color: #1A1A22; }
 }
 .suit .suit-sym { font-size: 38px; line-height: 1; }
 .suit .suit-name { font-size: 12px; font-weight: 700; color: var(--muted); }
-.suit.red .suit-sym { color: var(--red); }
+.suit.red .suit-sym, .suit.suit-h .suit-sym, .suit.suit-d .suit-sym { color: var(--red); }
+.suit.black .suit-sym, .suit.suit-c .suit-sym, .suit.suit-s .suit-sym { color: var(--suit-black); }
 .suit:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0,0,0,.12); }
 .trump-bar { flex-direction: column; gap: 10px; }
 
@@ -1080,6 +1083,7 @@ table.rt { width: 100%; border-collapse: separate; border-spacing: 0; font-varia
 .rt-trump { width: 52px; }
 .rt-suit { font-size: 18px; line-height: 1; color: var(--text); }
 .rt-suit.red { color: var(--red); }
+.rt-suit.black { color: var(--suit-black); }
 .rt-w { font-size: 9px; font-weight: 900; color: var(--muted); margin-left: 1px; }
 .rt-nt { color: var(--muted); font-weight: 800; }
 .rt-cell { position: relative; }
@@ -1179,6 +1183,11 @@ table.rt { width: 100%; border-collapse: separate; border-spacing: 0; font-varia
   display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
   margin: 4px auto 2px; max-width: 720px; padding: 0 8px;
 }
+.turn-banner .tb-suit { font-weight: 900; }
+.turn-banner .tb-suit.suit-h,
+.turn-banner .tb-suit.suit-d { color: #FFD0D0; }
+.turn-banner .tb-suit.suit-c,
+.turn-banner .tb-suit.suit-s { color: #FFFFFF; }
 .turn-banner .tb-main {
   display: inline-flex; align-items: center; gap: 8px;
   background: var(--turn-banner); color: var(--accent-ink);
