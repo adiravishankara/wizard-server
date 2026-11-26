@@ -97,6 +97,31 @@ async def rejoin_game(request: RejoinRequest):
         "name": game.state.players[player_idx]
     }
 
+
+@router.get("/{game_id}/join-info")
+async def join_info(game_id: str):
+    """Public peek used by shareable join links before a friend enters their name."""
+    if game_id not in games:
+        raise HTTPException(status_code=404, detail="Game not found")
+    game = games[game_id]
+    phase = phase_of(game)
+    n = len(game.state.players)
+    open_ = phase == "lobby" and n < 6
+    if open_:
+        detail = None
+    elif phase != "lobby":
+        detail = "This game has already started"
+    else:
+        detail = "This game is full"
+    return {
+        "game_id": game_id,
+        "phase": phase,
+        "players": n,
+        "open": open_,
+        "detail": detail,
+    }
+
+
 @router.post("/{game_id}/start")
 async def start_game(game_id: str):
     if game_id not in games:

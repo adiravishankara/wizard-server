@@ -38,10 +38,23 @@
 <main>
   <!-- ============ GAMES VIEW ============ -->
   <section id="view-games">
+    <div id="join-link-panel" class="card panel join-link-panel hidden">
+      <h2>Join game</h2>
+      <p class="join-link-room">Room <code id="jl-code"></code></p>
+      <p id="jl-meta" class="hint"></p>
+      <div id="jl-form">
+        <label>Your name <input id="jl-name" placeholder="e.g. Adi" maxlength="24" autocomplete="nickname"></label>
+        <button id="btn-jl-join" class="primary" type="button">Join game</button>
+      </div>
+      <div id="jl-error" class="join-link-error hidden">
+        <p id="jl-error-msg"></p>
+        <button id="btn-jl-home" class="ghost" type="button">Back home</button>
+      </div>
+    </div>
     <div id="games-home" class="panel-grid">
       <div class="card panel">
         <h2>New game</h2>
-        <label>Your name <input id="new-name" placeholder="e.g. Adi" maxlength="24"></label>
+        <label>Your name <input id="new-name" placeholder="e.g. Adi" maxlength="24" autocomplete="nickname"></label>
         <label>Bidding
           <select id="new-bidding">
             <option value="sequential">Sequential (normal)</option>
@@ -55,7 +68,7 @@
       <div class="card panel">
         <h2>Join game</h2>
         <label>Game code <input id="join-code" placeholder="8-char code" maxlength="8"></label>
-        <label>Your name <input id="join-name" placeholder="e.g. Adi" maxlength="24"></label>
+        <label>Your name <input id="join-name" placeholder="e.g. Adi" maxlength="24" autocomplete="nickname"></label>
         <button id="btn-join" class="primary">Join game</button>
       </div>
       <div class="card panel">
@@ -87,8 +100,12 @@
           <div class="lobby-code-block">
             <span class="lobby-code-label">Room code</span>
             <span class="lobby-code" id="lobby-code"></span>
+            <a class="lobby-join-link" id="lobby-join-link" href="#"></a>
           </div>
-          <button id="btn-copy-code" class="ghost" type="button">Copy</button>
+          <div class="lobby-share-actions">
+            <button id="btn-copy-link" class="ghost" type="button">Copy link</button>
+            <button id="btn-share-link" class="ghost share-btn" type="button">Share</button>
+          </div>
         </div>
         <div id="lobby-mode" class="mode-grid" role="group" aria-label="Bidding mode"></div>
         <div id="lobby-players" class="player-list seat-list"></div>
